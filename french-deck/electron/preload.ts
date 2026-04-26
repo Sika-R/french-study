@@ -46,7 +46,11 @@ const api = {
     pickDrill: (opts: { word_ids: number[]; tense_ids: string[] }) =>
       ipcRenderer.invoke('practice:pickDrill', opts),
     pickReverse: (opts: { word_ids: number[]; tense_ids: string[] }) =>
-      ipcRenderer.invoke('practice:pickReverse', opts)
+      ipcRenderer.invoke('practice:pickReverse', opts),
+    buildReversePool: (opts: { word_ids: number[]; tense_ids: string[] }) =>
+      ipcRenderer.invoke('practice:buildReversePool', opts),
+    buildDrillPool: (opts: { word_ids: number[]; tense_ids: string[] }) =>
+      ipcRenderer.invoke('practice:buildDrillPool', opts)
   }
 };
 

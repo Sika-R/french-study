@@ -177,38 +177,120 @@ export function registerPracticeHandlers(): void {
   }) => {
     if (opts.word_ids.length === 0 || opts.tense_ids.length === 0) return null;
     const db = getDb();
-    const wid = opts.word_ids[Math.floor(Math.random() * opts.word_ids.length)];
-    const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
-    if (!word) return null;
 
-    const tid = opts.tense_ids[Math.floor(Math.random() * opts.tense_ids.length)];
-    const t = tenseById(tid);
-    if (!t) return null;
+    // 外层重试：避免某个 (verb, tense) 在 Verbiste 中无任何有效变位时直接返回 null
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const wid = opts.word_ids[Math.floor(Math.random() * opts.word_ids.length)];
+      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+      if (!word) continue;
 
-    const persons = t.persons.length > 0 ? t.persons : [0];
-    for (let i = 0; i < 6; i++) {
-      const p = persons[Math.floor(Math.random() * persons.length)];
-      const sourcePerson = p === 0 ? 1 : p;
-      const conjugated = verbiste.conjugate(word.lemma, t.mode, t.tense, sourcePerson);
-      if (!conjugated) continue;
+      const tid = opts.tense_ids[Math.floor(Math.random() * opts.tense_ids.length)];
+      const t = tenseById(tid);
+      if (!t) continue;
 
-      // 找出该时态下所有变位为同一形式的人称
-      const matchingPersons: number[] = [];
+      const persons = t.persons.length > 0 ? t.persons : [0];
+
+      // 收集该 (word, tense) 下所有有效人称的变位
+      const valid: { person: number; conjugated: string }[] = [];
       for (const pp of persons) {
         const sp = pp === 0 ? 1 : pp;
         const v = verbiste.conjugate(word.lemma, t.mode, t.tense, sp);
-        if (v && fold(v) === fold(conjugated)) {
-          matchingPersons.push(pp);
-        }
+        if (v) valid.push({ person: pp, conjugated: v });
       }
+      if (valid.length === 0) continue;
+
+      const chosen = valid[Math.floor(Math.random() * valid.length)];
+      const matchingPersons = valid
+        .filter(v => fold(v.conjugated) === fold(chosen.conjugated))
+        .map(v => v.person);
+
       return {
         word,
         tense: t,
-        persons: matchingPersons,    // 所有正确人称（多选答案）
-        person: matchingPersons[0],  // 兼容字段：主答案
-        conjugated
+        persons: matchingPersons,
+        person: matchingPersons[0],
+        conjugated: chosen.conjugated
       };
     }
     return null;
+  });
+
+  /**
+   * 构建完整的反向识别题目池：枚举所有 (word, tense, person)，过滤无变位的，
+   * 同形人称合并为一道题。前端拿到后自己洗牌 + 按动词穿插 + 顺序消费。
+   */
+  ipcMain.handle('practice:buildReversePool', (_e, opts: {
+    word_ids: number[];
+    tense_ids: string[];
+  }) => {
+    if (opts.word_ids.length === 0 || opts.tense_ids.length === 0) return [];
+    const db = getDb();
+    const pool: Array<{
+      word: VerbCard;
+      tense: any;
+      persons: number[];
+      person: number;
+      conjugated: string;
+    }> = [];
+
+    for (const wid of opts.word_ids) {
+      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+      if (!word) continue;
+      for (const tid of opts.tense_ids) {
+        const t = tenseById(tid);
+        if (!t) continue;
+        const persons = t.persons.length > 0 ? t.persons : [0];
+        const valid: { person: number; conjugated: string }[] = [];
+        for (const pp of persons) {
+          const sp = pp === 0 ? 1 : pp;
+          const v = verbiste.conjugate(word.lemma, t.mode, t.tense, sp);
+          if (v) valid.push({ person: pp, conjugated: v });
+        }
+        const seen = new Set<string>();
+        for (const v of valid) {
+          const key = fold(v.conjugated);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const matching = valid.filter(x => fold(x.conjugated) === key).map(x => x.person);
+          pool.push({
+            word, tense: t,
+            persons: matching,
+            person: matching[0],
+            conjugated: v.conjugated
+          });
+        }
+      }
+    }
+    return pool;
+  });
+
+  /** Drill 题目池：每个 (word, tense, person) 一道独立题 */
+  ipcMain.handle('practice:buildDrillPool', (_e, opts: {
+    word_ids: number[];
+    tense_ids: string[];
+  }) => {
+    if (opts.word_ids.length === 0 || opts.tense_ids.length === 0) return [];
+    const db = getDb();
+    const pool: Array<{
+      word: VerbCard;
+      tense: any;
+      person: number;
+      expected: string;
+    }> = [];
+    for (const wid of opts.word_ids) {
+      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+      if (!word) continue;
+      for (const tid of opts.tense_ids) {
+        const t = tenseById(tid);
+        if (!t) continue;
+        const persons = t.persons.length > 0 ? t.persons : [0];
+        for (const pp of persons) {
+          const sp = pp === 0 ? 1 : pp;
+          const v = verbiste.conjugate(word.lemma, t.mode, t.tense, sp);
+          if (v) pool.push({ word, tense: t, person: pp, expected: v });
+        }
+      }
+    }
+    return pool;
   });
 }

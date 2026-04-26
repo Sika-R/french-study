@@ -31,6 +31,50 @@ function fold(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 }
 
+/** Fisher–Yates 洗牌（不改原数组） */
+function shuffle<T>(arr: T[]): T[] {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * 把按 verbId 分组的题目"穿插交错"——尽量避免连续两道题来自同一动词。
+ * 算法：每轮取每个动词组队首一个，组成一轮，轮内打乱顺序；继续直到所有组空。
+ */
+function interleaveByVerb<T extends { word: { id: number } }>(items: T[]): T[] {
+  const groups = new Map<number, T[]>();
+  for (const x of items) {
+    const arr = groups.get(x.word.id);
+    if (arr) arr.push(x); else groups.set(x.word.id, [x]);
+  }
+  // 每个组先打乱
+  for (const arr of groups.values()) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+  const result: T[] = [];
+  while (groups.size > 0) {
+    const round: T[] = [];
+    for (const [vid, arr] of [...groups.entries()]) {
+      round.push(arr.shift()!);
+      if (arr.length === 0) groups.delete(vid);
+    }
+    // 轮内打乱
+    for (let i = round.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [round[i], round[j]] = [round[j], round[i]];
+    }
+    result.push(...round);
+  }
+  return result;
+}
+
 type SubMode = 'table' | 'drill' | 'reverse';
 
 interface Props {
@@ -245,31 +289,43 @@ interface DrillItem {
 }
 
 function DrillPractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: TenseDef[]; onExit: () => void }) {
-  const [item, setItem] = useState<DrillItem | null>(null);
+  const [pool, setPool] = useState<DrillItem[] | null>(null);
+  const [idx, setIdx] = useState(0);
   const [input, setInput] = useState('');
   const [revealed, setRevealed] = useState<{ correct: boolean; expected: string } | null>(null);
-  const [count, setCount] = useState(0);
 
   const word_ids = useMemo(() => verbs.map(v => v.id), [verbs]);
   const tense_ids = useMemo(() => tenses.map(t => t.id), [tenses]);
 
-  const pick = async () => {
-    setInput('');
-    setRevealed(null);
-    const it = await window.api.practice.pickDrill({ word_ids, tense_ids });
-    setItem(it as DrillItem | null);
-  };
+  useEffect(() => {
+    window.api.practice.buildDrillPool({ word_ids, tense_ids })
+      .then((p: DrillItem[]) => setPool(interleaveByVerb(p)));
+  }, []);
 
-  useEffect(() => { pick(); }, []);
-
-  if (!item) {
+  if (!pool) return <p className="muted">加载中…</p>;
+  if (pool.length === 0) {
     return (
       <div>
-        <p className="muted">没有可抽取的题目（请检查所选动词在 Verbiste 中是否存在）。</p>
+        <p className="muted">没有可抽取的题目。</p>
         <button onClick={onExit}>返回</button>
       </div>
     );
   }
+  if (idx >= pool.length) {
+    return (
+      <div>
+        <h3>🎉 全部 {pool.length} 题练完！</h3>
+        <button onClick={onExit}>返回</button>
+        <button
+          className="ghost"
+          style={{ marginLeft: 8 }}
+          onClick={() => { setPool(interleaveByVerb(pool)); setIdx(0); setInput(''); setRevealed(null); }}
+        >再来一轮</button>
+      </div>
+    );
+  }
+
+  const item = pool[idx];
 
   const reveal = () => {
     setRevealed({ correct: fold(input) === fold(item.expected), expected: item.expected });
@@ -286,14 +342,15 @@ function DrillPractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
         correct: revealed.correct
       });
     }
-    setCount(c => c + 1);
-    pick();
+    setInput('');
+    setRevealed(null);
+    setIdx(i => i + 1);
   };
 
   return (
     <div>
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="muted">已完成 {count} 题</span>
+        <span className="muted">{idx + 1} / {pool.length}</span>
         <button className="ghost" onClick={onExit}>退出</button>
       </div>
       <h3 style={{ marginBottom: 4 }}>
@@ -333,28 +390,23 @@ interface ReverseItem {
 }
 
 function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: TenseDef[]; onExit: () => void }) {
-  const [item, setItem] = useState<ReverseItem | null>(null);
+  const [pool, setPool] = useState<ReverseItem[] | null>(null);
+  const [idx, setIdx] = useState(0);
   const [personPicks, setPersonPicks] = useState<Set<number>>(new Set());
   const [meaningInput, setMeaningInput] = useState('');
   const [revealed, setRevealed] = useState<{ personOk: boolean } | null>(null);
   const [meaningSelfGrade, setMeaningSelfGrade] = useState<boolean | null>(null);
-  const [count, setCount] = useState(0);
 
   const word_ids = useMemo(() => verbs.map(v => v.id), [verbs]);
   const tense_ids = useMemo(() => tenses.map(t => t.id), [tenses]);
 
-  const pick = async () => {
-    setPersonPicks(new Set());
-    setMeaningInput('');
-    setRevealed(null);
-    setMeaningSelfGrade(null);
-    const it = await window.api.practice.pickReverse({ word_ids, tense_ids });
-    setItem(it as ReverseItem | null);
-  };
+  useEffect(() => {
+    window.api.practice.buildReversePool({ word_ids, tense_ids })
+      .then((p: ReverseItem[]) => setPool(interleaveByVerb(p)));
+  }, []);
 
-  useEffect(() => { pick(); }, []);
-
-  if (!item) {
+  if (!pool) return <p className="muted">加载中…</p>;
+  if (pool.length === 0) {
     return (
       <div>
         <p className="muted">没有可抽取的题目。</p>
@@ -362,6 +414,28 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
       </div>
     );
   }
+  if (idx >= pool.length) {
+    return (
+      <div>
+        <h3>🎉 全部 {pool.length} 题练完！</h3>
+        <button onClick={onExit}>返回</button>
+        <button
+          className="ghost"
+          style={{ marginLeft: 8 }}
+          onClick={() => {
+            setPool(interleaveByVerb(pool));
+            setIdx(0);
+            setPersonPicks(new Set());
+            setMeaningInput('');
+            setRevealed(null);
+            setMeaningSelfGrade(null);
+          }}
+        >再来一轮</button>
+      </div>
+    );
+  }
+
+  const item = pool[idx];
 
   const togglePerson = (p: number) => {
     if (revealed) return;
@@ -371,34 +445,34 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
   };
 
   const reveal = () => {
-    // 集合相等才算对：少选/多选都视作错
     const expected = new Set(item.persons);
-    const actual = personPicks;
-    let personOk = expected.size === actual.size;
+    let personOk = expected.size === personPicks.size;
     if (personOk) {
-      for (const p of expected) if (!actual.has(p)) { personOk = false; break; }
+      for (const p of expected) if (!personPicks.has(p)) { personOk = false; break; }
     }
     setRevealed({ personOk });
   };
 
   const next = async () => {
     if (revealed) {
-      const meaningOk = meaningSelfGrade ?? true;
-      const correct = revealed.personOk && meaningOk;
+      const correct = revealed.personOk && meaningSelfGrade !== false;
       const expected = item.persons.map(p => PERSON_LABELS[p]).join(' / ');
       const userInput = `${[...personPicks].sort().map(p => PERSON_LABELS[p]).join(' / ') || '(未选)'} | 意思: ${meaningInput || '(未填)'} [自评:${meaningSelfGrade == null ? '未评' : meaningSelfGrade ? '对' : '错'}]`;
       await window.api.practice.submitOne({
         word_id: item.word.id,
         mode: 'reverse',
         tense_id: item.tense.id,
-        person: item.persons[0],   // 写入主答案人称
+        person: item.persons[0],
         user_input: userInput,
         expected,
         correct
       });
     }
-    setCount(c => c + 1);
-    pick();
+    setPersonPicks(new Set());
+    setMeaningInput('');
+    setRevealed(null);
+    setMeaningSelfGrade(null);
+    setIdx(i => i + 1);
   };
 
   const personOptions = item.tense.persons.length > 0 ? item.tense.persons : [0];
@@ -406,7 +480,7 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
   return (
     <div>
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="muted">已完成 {count} 题</span>
+        <span className="muted">{idx + 1} / {pool.length}</span>
         <button className="ghost" onClick={onExit}>退出</button>
       </div>
       <div className="muted" style={{ marginBottom: 6 }}>
@@ -489,7 +563,7 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
         {!revealed ? (
           <button onClick={reveal} disabled={personPicks.size === 0}>提交</button>
         ) : (
-          <button onClick={next} autoFocus disabled={meaningSelfGrade == null}>下一题</button>
+          <button onClick={next} autoFocus>下一题</button>
         )}
       </div>
     </div>

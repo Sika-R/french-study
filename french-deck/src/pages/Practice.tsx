@@ -327,24 +327,27 @@ function DrillPractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
 interface ReverseItem {
   word: VerbCard;
   tense: TenseDef;
-  person: number;
+  persons: number[];     // 所有正确的同形人称（多选答案）
+  person: number;        // 兼容旧字段，等于 persons[0]
   conjugated: string;
 }
 
 function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: TenseDef[]; onExit: () => void }) {
   const [item, setItem] = useState<ReverseItem | null>(null);
-  const [personInput, setPersonInput] = useState<number | null>(null);
+  const [personPicks, setPersonPicks] = useState<Set<number>>(new Set());
   const [meaningInput, setMeaningInput] = useState('');
-  const [revealed, setRevealed] = useState<{ personOk: boolean; meaningOk: boolean } | null>(null);
+  const [revealed, setRevealed] = useState<{ personOk: boolean } | null>(null);
+  const [meaningSelfGrade, setMeaningSelfGrade] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
 
   const word_ids = useMemo(() => verbs.map(v => v.id), [verbs]);
   const tense_ids = useMemo(() => tenses.map(t => t.id), [tenses]);
 
   const pick = async () => {
-    setPersonInput(null);
+    setPersonPicks(new Set());
     setMeaningInput('');
     setRevealed(null);
+    setMeaningSelfGrade(null);
     const it = await window.api.practice.pickReverse({ word_ids, tense_ids });
     setItem(it as ReverseItem | null);
   };
@@ -360,29 +363,35 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
     );
   }
 
-  const reveal = () => {
-    const personOk = item.person === 0 ? personInput === 0 : personInput === item.person;
-    const expectedZh = (item.word.translation_zh ?? '').trim();
-    const expectedEn = (item.word.translation_en ?? '').trim();
-    const userMeaning = meaningInput.trim();
-    const meaningOk =
-      userMeaning.length > 0 &&
-      (
-        (expectedZh && userMeaning.includes(expectedZh)) ||
-        (expectedEn && userMeaning.toLowerCase().includes(expectedEn.toLowerCase()))
-      );
-    setRevealed({ personOk, meaningOk });
+  const togglePerson = (p: number) => {
+    if (revealed) return;
+    const next = new Set(personPicks);
+    next.has(p) ? next.delete(p) : next.add(p);
+    setPersonPicks(next);
   };
+
+  const reveal = () => {
+    // 集合相等才算对：少选/多选都视作错
+    const expected = new Set(item.persons);
+    const actual = personPicks;
+    let personOk = expected.size === actual.size;
+    if (personOk) {
+      for (const p of expected) if (!actual.has(p)) { personOk = false; break; }
+    }
+    setRevealed({ personOk });
+  };
+
   const next = async () => {
     if (revealed) {
-      const correct = revealed.personOk && revealed.meaningOk;
-      const expected = `${PERSON_LABELS[item.person]} | ${item.word.translation_zh ?? item.word.translation_en ?? ''}`;
-      const userInput = `${personInput != null ? PERSON_LABELS[personInput] : '(未选)'} | ${meaningInput}`;
+      const meaningOk = meaningSelfGrade ?? true;
+      const correct = revealed.personOk && meaningOk;
+      const expected = item.persons.map(p => PERSON_LABELS[p]).join(' / ');
+      const userInput = `${[...personPicks].sort().map(p => PERSON_LABELS[p]).join(' / ') || '(未选)'} | 意思: ${meaningInput || '(未填)'} [自评:${meaningSelfGrade == null ? '未评' : meaningSelfGrade ? '对' : '错'}]`;
       await window.api.practice.submitOne({
         word_id: item.word.id,
         mode: 'reverse',
         tense_id: item.tense.id,
-        person: item.person,
+        person: item.persons[0],   // 写入主答案人称
         user_input: userInput,
         expected,
         correct
@@ -392,7 +401,6 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
     pick();
   };
 
-  // 该时态可用的人称选项
   const personOptions = item.tense.persons.length > 0 ? item.tense.persons : [0];
 
   return (
@@ -403,6 +411,7 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
       </div>
       <div className="muted" style={{ marginBottom: 6 }}>
         <span className="tag">{item.tense.zh}</span>
+        <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>(可多选，同形人称都要选)</span>
       </div>
       <h2 style={{ margin: '6px 0 16px', fontSize: 36, color: '#4361ee' }}>{item.conjugated}</h2>
 
@@ -413,8 +422,8 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
             <button
               key={p}
               type="button"
-              className={personInput === p ? '' : 'ghost'}
-              onClick={() => setPersonInput(p)}
+              className={personPicks.has(p) ? '' : 'ghost'}
+              onClick={() => togglePerson(p)}
               disabled={!!revealed}
               style={{ padding: '6px 14px' }}
             >
@@ -425,7 +434,7 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
       </div>
 
       <div>
-        <label>动词意思 (中文或英文)</label>
+        <label>动词意思 <span className="muted" style={{ fontSize: 12 }}>(揭示答案后自评)</span></label>
         <input
           value={meaningInput}
           onChange={e => setMeaningInput(e.target.value)}
@@ -438,17 +447,50 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
       {revealed && (
         <div style={{
           marginTop: 12, padding: 12, borderRadius: 8,
-          background: (revealed.personOk && revealed.meaningOk) ? '#e8f7ee' : '#fdecea',
-          color: (revealed.personOk && revealed.meaningOk) ? '#1e7c3a' : '#b1261e'
+          background: (revealed.personOk && (meaningSelfGrade !== false)) ? '#e8f7ee' : '#fdecea',
+          color: (revealed.personOk && (meaningSelfGrade !== false)) ? '#1e7c3a' : '#b1261e'
         }}>
-          <div>主语：{revealed.personOk ? '✓' : '✗'} 正确答案 <strong>{PERSON_LABELS[item.person]}</strong></div>
-          <div>意思：{revealed.meaningOk ? '✓' : '✗'} 正确答案 <strong>{item.word.translation_zh ?? item.word.translation_en ?? '(无翻译)'}</strong></div>
-          <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>原型：{item.word.lemma}</div>
+          <div>
+            主语：{revealed.personOk ? '✓ 正确' : '✗'} 答案
+            <strong> {item.persons.map(p => PERSON_LABELS[p]).join(' / ')}</strong>
+            {item.persons.length > 1 && <span className="muted" style={{ marginLeft: 6, fontSize: 12 }}>(同形人称必须全选)</span>}
+          </div>
+          <div style={{ marginTop: 6 }}>
+            意思参考：
+            <strong>{item.word.translation_zh ?? '(无中文)'}</strong>
+            {item.word.translation_en && <span className="muted"> · {item.word.translation_en}</span>}
+            <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>(原型: {item.word.lemma})</span>
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8 }}>
+            <span className="muted" style={{ fontSize: 13 }}>意思我答的：</span>
+            <button
+              type="button"
+              onClick={() => setMeaningSelfGrade(true)}
+              style={{
+                padding: '4px 12px', fontSize: 13,
+                background: meaningSelfGrade === true ? '#27ae60' : '#eef1fc',
+                color: meaningSelfGrade === true ? 'white' : '#1f2330'
+              }}
+            >✓ 对了</button>
+            <button
+              type="button"
+              onClick={() => setMeaningSelfGrade(false)}
+              style={{
+                padding: '4px 12px', fontSize: 13,
+                background: meaningSelfGrade === false ? '#e74c3c' : '#eef1fc',
+                color: meaningSelfGrade === false ? 'white' : '#1f2330'
+              }}
+            >✗ 错了</button>
+          </div>
         </div>
       )}
 
       <div className="row" style={{ marginTop: 12 }}>
-        {!revealed ? <button onClick={reveal}>提交</button> : <button onClick={next} autoFocus>下一题</button>}
+        {!revealed ? (
+          <button onClick={reveal} disabled={personPicks.size === 0}>提交</button>
+        ) : (
+          <button onClick={next} autoFocus disabled={meaningSelfGrade == null}>下一题</button>
+        )}
       </div>
     </div>
   );

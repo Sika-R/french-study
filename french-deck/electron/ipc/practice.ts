@@ -169,7 +169,7 @@ export function registerPracticeHandlers(): void {
 
   /**
    * Reverse 模式：取一个 (verb, tense, person)，给出变位形式让用户猜原型/人称
-   * 返回时不带 expected，让前端比对（用户要写主语 + 翻译）
+   * 返回时同时计算该 (verb, tense) 下所有产生**相同变位形式**的人称（同形人称需多选）
    */
   ipcMain.handle('practice:pickReverse', (_e, opts: {
     word_ids: number[];
@@ -190,14 +190,24 @@ export function registerPracticeHandlers(): void {
       const p = persons[Math.floor(Math.random() * persons.length)];
       const sourcePerson = p === 0 ? 1 : p;
       const conjugated = verbiste.conjugate(word.lemma, t.mode, t.tense, sourcePerson);
-      if (conjugated) {
-        return {
-          word,            // 含 lemma + 翻译，用于 UI 比对答案
-          tense: t,
-          person: p,
-          conjugated
-        };
+      if (!conjugated) continue;
+
+      // 找出该时态下所有变位为同一形式的人称
+      const matchingPersons: number[] = [];
+      for (const pp of persons) {
+        const sp = pp === 0 ? 1 : pp;
+        const v = verbiste.conjugate(word.lemma, t.mode, t.tense, sp);
+        if (v && fold(v) === fold(conjugated)) {
+          matchingPersons.push(pp);
+        }
       }
+      return {
+        word,
+        tense: t,
+        persons: matchingPersons,    // 所有正确人称（多选答案）
+        person: matchingPersons[0],  // 兼容字段：主答案
+        conjugated
+      };
     }
     return null;
   });

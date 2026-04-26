@@ -7,6 +7,7 @@ import { verbiste, defaultVerbistePaths } from '../server/dict/verbiste.js';
 import { registerWordHandlers } from './ipc/words.js';
 import { registerLookupHandlers } from './ipc/lookup.js';
 import { registerReviewHandlers } from './ipc/review.js';
+import { registerPracticeHandlers } from './ipc/practice.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +48,7 @@ app.whenReady().then(async () => {
   registerWordHandlers();
   registerLookupHandlers();
   registerReviewHandlers();
+  registerPracticeHandlers();
 
   await createWindow();
 

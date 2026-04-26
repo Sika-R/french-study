@@ -29,10 +29,12 @@ CREATE TABLE IF NOT EXISTS review_logs (
   word_id       INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
   reviewed_at   INTEGER NOT NULL,
   rating        INTEGER NOT NULL,
-  mode          TEXT NOT NULL,
+  mode          TEXT NOT NULL,                -- 'spell' | 'conjugation' | 'drill' | 'reverse'
   correct       INTEGER NOT NULL,
   user_input    TEXT,
-  expected      TEXT
+  expected      TEXT,
+  tense_id      TEXT,                          -- e.g. 'indicative.present' (变位练习用)
+  person        INTEGER                        -- 1..6 (变位练习用，分词留空)
 );
 
 CREATE TABLE IF NOT EXISTS lookup_cache (

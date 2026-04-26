@@ -29,6 +29,24 @@ const api = {
       ipcRenderer.invoke('review:errorRateTop', opts ?? {}),
     dailyCounts: (days?: number) => ipcRenderer.invoke('review:dailyCounts', days ?? 30),
     summary: () => ipcRenderer.invoke('review:summary')
+  },
+  practice: {
+    tenses: () => ipcRenderer.invoke('practice:tenses'),
+    verbs: () => ipcRenderer.invoke('practice:verbs'),
+    conjugationTable: (infinitive: string, tenseId: string) =>
+      ipcRenderer.invoke('practice:conjugationTable', infinitive, tenseId),
+    submitTable: (args: { word_id: number; verb: string; tense_id: string; answers: Record<number, string> }) =>
+      ipcRenderer.invoke('practice:submitTable', args),
+    submitOne: (args: {
+      word_id: number; mode: 'drill' | 'reverse'; tense_id: string; person: number;
+      user_input: string; expected: string; correct: boolean;
+    }) => ipcRenderer.invoke('practice:submitOne', args),
+    errorStatsByTense: (opts?: { minAttempts?: number }) =>
+      ipcRenderer.invoke('practice:errorStatsByTense', opts ?? {}),
+    pickDrill: (opts: { word_ids: number[]; tense_ids: string[] }) =>
+      ipcRenderer.invoke('practice:pickDrill', opts),
+    pickReverse: (opts: { word_ids: number[]; tense_ids: string[] }) =>
+      ipcRenderer.invoke('practice:pickReverse', opts)
   }
 };
 

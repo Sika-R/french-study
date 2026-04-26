@@ -38,13 +38,17 @@ class Verbiste {
     const verbsRaw = parser.parse(fs.readFileSync(verbsXmlPath, 'utf-8'));
     const list = verbsRaw['verbs-fr']?.v ?? [];
     for (const v of Array.isArray(list) ? list : [list]) {
-      // <v i="aimer" t="aim:er"/>
+      // <v i="connaître" t="para:ître"/>
+      // template 名是 "para:ître"（para 是示范动词的 root，ître 是共享的词尾）
+      // 实际动词的 root = 不定式去掉 template 词尾部分
       const inf = v.i as string;
-      const t = v.t as string; // e.g. "aim:er"
+      const t = v.t as string;
       if (!inf || !t) continue;
-      const [root, suffix] = t.split(':');
+      const colonIdx = t.indexOf(':');
+      const tmplEnding = colonIdx >= 0 ? t.slice(colonIdx + 1) : '';
+      const tmplRoot = colonIdx >= 0 ? t.slice(0, colonIdx) : t;
+      const root = inf.endsWith(tmplEnding) ? inf.slice(0, inf.length - tmplEnding.length) : tmplRoot;
       this.verbs.set(inf, { template: t, root });
-      // suffix unused for now
     }
 
     const conjRaw = parser.parse(fs.readFileSync(conjXmlPath, 'utf-8'));

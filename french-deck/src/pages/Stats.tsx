@@ -7,6 +7,12 @@ interface ErrorRow {
   error_rate: number; attempts: number;
 }
 interface DailyRow { day: string; total: number; correct: number }
+interface TenseStat { tense_id: string; person: number | null; error_rate: number; attempts: number }
+interface TenseDef { id: string; zh: string; fr: string }
+
+const PERSON_LABELS: Record<number | string, string> = {
+  0: '(无人称)', 1: 'je', 2: 'tu', 3: 'il/elle', 4: 'nous', 5: 'vous', 6: 'ils/elles'
+};
 
 /** 简易内嵌 SVG 折线图，避免引入 chart 库 */
 function Sparkline({ data, height = 120 }: { data: DailyRow[]; height?: number }) {
@@ -39,14 +45,20 @@ export default function Stats() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [errors, setErrors] = useState<ErrorRow[]>([]);
   const [daily, setDaily] = useState<DailyRow[]>([]);
+  const [tenseStats, setTenseStats] = useState<TenseStat[]>([]);
+  const [tenseDefs, setTenseDefs] = useState<TenseDef[]>([]);
 
   const load = async () => {
     setSummary((await window.api.review.summary()) as Summary);
     setErrors((await window.api.review.errorRateTop({ limit: 20, minAttempts: 1 })) as ErrorRow[]);
     setDaily((await window.api.review.dailyCounts(30)) as DailyRow[]);
+    setTenseStats((await window.api.practice.errorStatsByTense({ minAttempts: 1 })) as TenseStat[]);
+    setTenseDefs((await window.api.practice.tenses()) as TenseDef[]);
   };
 
   useEffect(() => { load(); }, []);
+
+  const tenseLabel = (id: string) => tenseDefs.find(t => t.id === id)?.zh ?? id;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -64,6 +76,34 @@ export default function Stats() {
       <div className="card" style={{ maxWidth: 900 }}>
         <h2 style={{ marginTop: 0 }}>近 30 天复习曲线</h2>
         <Sparkline data={daily} />
+      </div>
+
+      <div className="card" style={{ maxWidth: 900 }}>
+        <h2 style={{ marginTop: 0 }}>变位错误率（按时态 × 人称）</h2>
+        {tenseStats.length === 0 && <p className="muted">还没有变位练习记录。去「复习」页的变位填表/单题练几道。</p>}
+        {tenseStats.length > 0 && (
+          <>
+            <div className="list-row" style={{ fontWeight: 600, color: '#666' }}>
+              <div>时态</div>
+              <div>人称</div>
+              <div>错误率 / 次数</div>
+              <div></div>
+            </div>
+            {tenseStats.map((r, i) => (
+              <div key={i} className="list-row">
+                <div>{tenseLabel(r.tense_id)}</div>
+                <div>{r.person == null ? '—' : PERSON_LABELS[r.person]}</div>
+                <div>
+                  <strong style={{ color: r.error_rate > 0.5 ? '#b1261e' : r.error_rate > 0.2 ? '#e67e22' : '#1e7c3a' }}>
+                    {(r.error_rate * 100).toFixed(0)}%
+                  </strong>
+                  <span className="muted"> / {r.attempts}</span>
+                </div>
+                <div></div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       <div className="card" style={{ maxWidth: 900 }}>

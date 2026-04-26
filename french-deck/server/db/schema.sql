@@ -41,5 +41,8 @@ CREATE TABLE IF NOT EXISTS lookup_cache (
   fetched_at    INTEGER NOT NULL
 );
 
+-- 旧版本缓存按 surface 缓存，新版本按 lemma 缓存，存量缓存可能不准
+-- 让用户通过删除 db 文件强制重置（这里不主动清，避免误删）
+
 CREATE INDEX IF NOT EXISTS idx_srs_due ON srs_state(due);
 CREATE INDEX IF NOT EXISTS idx_logs_word ON review_logs(word_id);

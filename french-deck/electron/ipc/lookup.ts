@@ -27,13 +27,15 @@ export function registerLookupHandlers(): void {
         const inf = verbiste.getInfinitive(lex.lemma) ?? lex.lemma;
         lemma = inf;
       }
-      // Lexique 本身没有翻译。并行去 Wiktionary 取英文释义（命中缓存就秒回）。
-      const wkt = await lookupWiktionary(s).catch(() => null);
+      // 用 lemma（原型）去 Wiktionary 取释义；变位形式如 mange 也能拿到 manger 的释义
+      const wkt = await lookupWiktionary(lemma).catch(() => null);
+      // 动词/副词等不应有 gender
+      const gender = lex.pos === 'noun' || lex.pos === 'adj' ? lex.gender : null;
       return {
         surface: s,
         lemma,
         pos: lex.pos,
-        gender: lex.gender,
+        gender,
         translation_en: wkt?.translation_en ?? null,
         source: 'lexique'
       };

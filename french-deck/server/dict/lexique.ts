@@ -9,6 +9,7 @@ export interface LexEntry {
   lemma: string;     // lemme
   pos: LexPos;
   gender: 'm' | 'f' | null;
+  freq: number;      // freqlemfilms2 (字幕频率), 用于消歧
 }
 
 // Lexique 词性标签（cgram）映射
@@ -54,7 +55,7 @@ class LexiqueIndex {
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
     let header: string[] | null = null;
-    let iOrtho = -1, iLemme = -1, iCgram = -1, iGenre = -1;
+    let iOrtho = -1, iLemme = -1, iCgram = -1, iGenre = -1, iFreq = -1;
 
     for await (const line of rl) {
       if (!line) continue;
@@ -65,18 +66,22 @@ class LexiqueIndex {
         iLemme = header.indexOf('lemme');
         iCgram = header.indexOf('cgram');
         iGenre = header.indexOf('genre');
+        iFreq = header.indexOf('freqlemfilms2');
         continue;
       }
       const surface = cols[iOrtho]?.toLowerCase();
       const lemme = cols[iLemme]?.toLowerCase();
       const cgram = cols[iCgram] ?? '';
       const genre = cols[iGenre] ?? '';
+      const freqStr = (cols[iFreq] ?? '0').replace(',', '.');
+      const freq = parseFloat(freqStr) || 0;
       if (!surface || !lemme) continue;
       const entry: LexEntry = {
         surface,
         lemma: lemme,
         pos: mapPos(cgram),
-        gender: genre === 'm' ? 'm' : genre === 'f' ? 'f' : null
+        gender: genre === 'm' ? 'm' : genre === 'f' ? 'f' : null,
+        freq
       };
       const list = this.bySurface.get(surface);
       if (list) list.push(entry);
@@ -90,9 +95,8 @@ class LexiqueIndex {
     const key = surface.trim().toLowerCase();
     const list = this.bySurface.get(key);
     if (!list || list.length === 0) return null;
-    // 选择最常见词性优先：noun > verb > adj > 其它
-    const order: LexPos[] = ['noun', 'verb', 'adj', 'adv', 'pronoun', 'prep', 'det', 'conj', 'interj', 'other'];
-    return [...list].sort((a, b) => order.indexOf(a.pos) - order.indexOf(b.pos))[0];
+    // 频率最高的义项胜出（manger 作为动词频率远高于 NOM "食槽"）
+    return [...list].sort((a, b) => b.freq - a.freq)[0];
   }
 
   isReady(): boolean {

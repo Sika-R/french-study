@@ -103,8 +103,8 @@ export default function Review() {
     }
   };
 
-  /** 第二步：用户自评，写库 + 推进卡片 */
-  const grade = async (rating: 1 | 2 | 3 | 4) => {
+  /** 第二步：写库 + 推进卡片。rating 由对错自动决定 */
+  const next = async () => {
     if (!revealed) return;
     const expected = mode === 'conjugation' && conjPick ? conjPick.expected
       : expectedSpell + (card.gender ? ` [${card.gender}]` : '');
@@ -116,7 +116,7 @@ export default function Review() {
       mode,
       user_input: userInput,
       expected,
-      rating
+      rating: revealed.correct ? 3 : 1
     });
     if (idx + 1 >= queue.length) setDone(true); else setIdx(idx + 1);
   };
@@ -201,12 +201,8 @@ export default function Review() {
             <strong>{revealed.correct ? '✓ 正确' : '✗ 答案：' + revealed.expected}</strong>
           </div>
 
-          <div className="row" style={{ marginTop: 12, gap: 6, flexWrap: 'wrap' }}>
-            <span className="muted">自评：</span>
-            <button onClick={() => grade(1)} style={{ background: '#e74c3c' }}>Again</button>
-            <button onClick={() => grade(2)} style={{ background: '#e67e22' }}>Hard</button>
-            <button onClick={() => grade(3)} style={{ background: '#27ae60' }}>Good</button>
-            <button onClick={() => grade(4)} style={{ background: '#2980b9' }}>Easy</button>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button onClick={next} autoFocus>下一张</button>
           </div>
         </>
       )}

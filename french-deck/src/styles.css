@@ -1,0 +1,86 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f6f7fb;
+  color: #1f2330;
+}
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+.sidebar {
+  width: 200px;
+  background: #1f2330;
+  color: #f6f7fb;
+  padding: 24px 16px;
+}
+.sidebar h1 { font-size: 18px; margin: 0 0 24px; }
+.sidebar a {
+  display: block;
+  color: #d6d9e3;
+  text-decoration: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+.sidebar a:hover { background: #2c3142; }
+.sidebar a.active { background: #4361ee; color: white; }
+
+.main { flex: 1; padding: 32px; overflow-y: auto; }
+.card {
+  background: white;
+  border-radius: 10px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  max-width: 700px;
+}
+.row { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
+label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
+input, select, textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d4d6df;
+  border-radius: 6px;
+  font-size: 14px;
+  background: white;
+}
+button {
+  background: #4361ee;
+  color: white;
+  border: none;
+  padding: 9px 18px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+button:hover { background: #3651d4; }
+button.ghost { background: transparent; color: #4361ee; }
+button.ghost:hover { background: #eef1fc; }
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #eef1fc;
+  color: #4361ee;
+  margin-right: 6px;
+}
+.tag.gender-m { background: #d8eafd; color: #1565c0; }
+.tag.gender-f { background: #fde0ec; color: #c2185b; }
+.accent-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.accent-bar button {
+  background: #eef1fc;
+  color: #1f2330;
+  padding: 4px 10px;
+  font-size: 14px;
+}
+.muted { color: #888; font-size: 13px; }
+.list-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 80px;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #eef0f4;
+  align-items: center;
+}

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(curl -L -o french-deck/resources/dict/verbs-fr.xml \"https://raw.githubusercontent.com/allan-simon/verbiste-android/master/data/verbs-fr.xml\" -s)",
+      "Bash(curl -L -o french-deck/resources/dict/conjugation-fr.xml \"https://raw.githubusercontent.com/allan-simon/verbiste-android/master/data/conjugation-fr.xml\" -s)"
+    ]
+  }
+}

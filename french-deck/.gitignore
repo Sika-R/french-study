@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+.vite/
+*.log
+.DS_Store
+
+# 本地 SQLite (不会出现在源码目录中，但以防万一)
+*.db
+*.db-wal
+*.db-shm

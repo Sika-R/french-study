@@ -121,6 +121,72 @@ export function registerReviewHandlers(): void {
     `).all(minAttempts, limit);
   });
 
+  /** 拼写错误率：仅 mode='spell'，按 word 聚合 */
+  ipcMain.handle('review:errorRateSpell', (_e, opts: { limit?: number; minAttempts?: number } = {}) => {
+    const db = getDb();
+    const limit = opts.limit ?? 50;
+    const minAttempts = opts.minAttempts ?? 1;
+    return db.prepare(`
+      SELECT w.id, w.lemma, w.surface, w.pos, w.gender, w.translation_zh, w.translation_en,
+             SUM(1 - r.correct) * 1.0 / COUNT(*) AS error_rate,
+             COUNT(*) AS attempts,
+             (SELECT expected FROM review_logs r2
+              WHERE r2.word_id = w.id AND r2.mode = 'spell'
+              ORDER BY r2.reviewed_at DESC LIMIT 1) AS expected
+      FROM review_logs r JOIN words w ON w.id = r.word_id
+      WHERE r.mode = 'spell'
+      GROUP BY r.word_id
+      HAVING attempts >= ?
+      ORDER BY error_rate DESC, attempts DESC
+      LIMIT ?
+    `).all(minAttempts, limit);
+  });
+
+  /** 变位错误率：按 (word, tense_id, person) 三元组（同一动词不同人称分开） */
+  ipcMain.handle('review:errorRateConjugation', (_e, opts: { limit?: number; minAttempts?: number } = {}) => {
+    const db = getDb();
+    const limit = opts.limit ?? 100;
+    const minAttempts = opts.minAttempts ?? 1;
+    return db.prepare(`
+      SELECT w.id, w.lemma, w.translation_zh, w.translation_en,
+             r.tense_id, r.person,
+             SUM(1 - r.correct) * 1.0 / COUNT(*) AS error_rate,
+             COUNT(*) AS attempts,
+             (SELECT expected FROM review_logs r2
+              WHERE r2.word_id = w.id AND r2.tense_id = r.tense_id
+                AND COALESCE(r2.person, -1) = COALESCE(r.person, -1)
+              ORDER BY r2.reviewed_at DESC LIMIT 1) AS expected
+      FROM review_logs r JOIN words w ON w.id = r.word_id
+      WHERE r.mode IN ('drill-table', 'drill-single') AND r.tense_id IS NOT NULL
+      GROUP BY w.id, r.tense_id, r.person
+      HAVING attempts >= ?
+      ORDER BY error_rate DESC, attempts DESC
+      LIMIT ?
+    `).all(minAttempts, limit);
+  });
+
+  /** 阴阳错误率：mode IN (adj-form, noun-gender)，按 word */
+  ipcMain.handle('review:errorRateGender', (_e, opts: { limit?: number; minAttempts?: number } = {}) => {
+    const db = getDb();
+    const limit = opts.limit ?? 50;
+    const minAttempts = opts.minAttempts ?? 1;
+    return db.prepare(`
+      SELECT w.id, w.lemma, w.gender, w.pos, w.translation_zh, w.translation_en,
+             r.mode,
+             SUM(1 - r.correct) * 1.0 / COUNT(*) AS error_rate,
+             COUNT(*) AS attempts,
+             (SELECT expected FROM review_logs r2
+              WHERE r2.word_id = w.id AND r2.mode = r.mode
+              ORDER BY r2.reviewed_at DESC LIMIT 1) AS expected
+      FROM review_logs r JOIN words w ON w.id = r.word_id
+      WHERE r.mode IN ('adj-form', 'noun-gender')
+      GROUP BY r.word_id, r.mode
+      HAVING attempts >= ?
+      ORDER BY error_rate DESC, attempts DESC
+      LIMIT ?
+    `).all(minAttempts, limit);
+  });
+
   /** 30 天复习曲线 */
   ipcMain.handle('review:dailyCounts', (_e, days: number = 30) => {
     const db = getDb();

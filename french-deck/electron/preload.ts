@@ -30,6 +30,12 @@ const api = {
     }) => ipcRenderer.invoke('review:submit', args),
     errorRateTop: (opts?: { limit?: number; minAttempts?: number }) =>
       ipcRenderer.invoke('review:errorRateTop', opts ?? {}),
+    errorRateSpell: (opts?: { limit?: number; minAttempts?: number }) =>
+      ipcRenderer.invoke('review:errorRateSpell', opts ?? {}),
+    errorRateConjugation: (opts?: { limit?: number; minAttempts?: number }) =>
+      ipcRenderer.invoke('review:errorRateConjugation', opts ?? {}),
+    errorRateGender: (opts?: { limit?: number; minAttempts?: number }) =>
+      ipcRenderer.invoke('review:errorRateGender', opts ?? {}),
     dailyCounts: (days?: number) => ipcRenderer.invoke('review:dailyCounts', days ?? 30),
     summary: () => ipcRenderer.invoke('review:summary')
   },

@@ -4,6 +4,7 @@ import Practice from './Practice';
 import AdjPractice from './AdjPractice';
 import NounPractice from './NounPractice';
 import NoteReview from './NoteReview';
+import IntegratedSpellReview, { IntegratedConfigScreen, type IntegratedConfig } from './IntegratedSpellReview';
 import SelectWordsDialog from '../components/SelectWordsDialog';
 import SelectNotesDialog from '../components/SelectNotesDialog';
 
@@ -30,6 +31,7 @@ export default function Review() {
 
   // 当前会话选中的 word ids (null 表示未开始 / 还没选)
   const [spellWordIds, setSpellWordIds] = useState<number[] | null>(null);
+  const [spellConfig, setSpellConfig] = useState<IntegratedConfig | null>(null);
   const [verbWordIds, setVerbWordIds] = useState<number[] | null>(null);
   const [adjWordIds, setAdjWordIds] = useState<number[] | null>(null);
   const [nounWordIds, setNounWordIds] = useState<number[] | null>(null);
@@ -47,14 +49,30 @@ export default function Review() {
       </div>
 
       {tab === 'spell' && (
-        spellWordIds == null ? (
+        spellConfig == null ? (
+          <IntegratedConfigScreen
+            initial={{ enableVerb: false, enableAdj: false, verbTenseIds: [] }}
+            onStart={(cfg) => { setSpellConfig(cfg); setShowDialog('spell'); }}
+          />
+        ) : spellWordIds == null ? (
           <StartScreen
             title="拼写复习"
-            description="给出翻译/词性，让你输入法语单词；名词需选择阴阳性。"
+            description={`已配置子练习 — 形容词:${spellConfig.enableAdj ? '✓' : '✗'} · 动词:${spellConfig.enableVerb ? `✓ (${spellConfig.verbTenseIds.length} 时态)` : '✗'}。下面去选词。`}
             onStart={() => setShowDialog('spell')}
           />
         ) : (
-          <SpellReview wordIds={spellWordIds} onExit={() => setSpellWordIds(null)} />
+          <div>
+            <div className="row" style={{ marginBottom: 12, justifyContent: 'flex-end' }}>
+              <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>已选 {spellWordIds.length} 个词</span>
+              <button className="ghost" onClick={() => setSpellWordIds(null)}>重新选词</button>
+              <button className="ghost" onClick={() => { setSpellWordIds(null); setSpellConfig(null); }}>重新配置</button>
+            </div>
+            <IntegratedSpellReview
+              wordIds={spellWordIds}
+              config={spellConfig}
+              onExit={() => setSpellWordIds(null)}
+            />
+          </div>
         )
       )}
 

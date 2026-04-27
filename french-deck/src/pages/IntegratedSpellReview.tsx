@@ -1,0 +1,554 @@
+import { useEffect, useState } from 'react';
+import AccentInput from '../components/AccentInput';
+import { fold } from '../utils/fold';
+
+interface QueueCard {
+  id: number;
+  lemma: string;
+  surface: string;
+  pos: string;
+  gender: 'm' | 'f' | null;
+  translation_zh: string | null;
+  translation_en: string | null;
+}
+
+interface TenseDef {
+  id: string;
+  mode: string;
+  tense: string;
+  zh: string;
+  fr: string;
+  persons: number[];
+}
+
+const PERSON_LABELS: Record<number, string> = {
+  0: '(无人称)',
+  1: 'je / j’',
+  2: 'tu',
+  3: 'il / elle / on',
+  4: 'nous',
+  5: 'vous',
+  6: 'ils / elles'
+};
+
+export interface IntegratedConfig {
+  enableVerb: boolean;
+  enableAdj: boolean;
+  verbTenseIds: string[]; // 选定的时态
+}
+
+interface Props {
+  wordIds: number[];
+  config: IntegratedConfig;
+  onExit: () => void;
+}
+
+/** 单格变位 / 形容词阴阳 子题状态 */
+interface SubCellAnswer {
+  key: string;        // 'verb:tenseId:person' or 'adj:m' / 'adj:f'
+  expected: string;
+  user: string;
+  done: boolean;      // 已经做对
+}
+
+/** 每个 word 进入子练习阶段的内部状态 */
+interface SubStage {
+  type: 'adj' | 'verb';
+  // adj 用：m/f 两个 cell
+  // verb 用：当前正在做的 tenseId、当前 round 的 cells
+  tenseQueue?: { tenseId: string; cells: SubCellAnswer[] }[]; // 多个时态依次完成
+  currentTenseIdx?: number;
+  cells: SubCellAnswer[];   // 当前正在 render 的 cells
+  submitted: boolean;        // 当前 round 是否已经提交（决定显示对错色）
+}
+
+export default function IntegratedSpellReview({ wordIds, config, onExit }: Props) {
+  const [queue, setQueue] = useState<QueueCard[]>([]);
+  const [idx, setIdx] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [done, setDone] = useState(false);
+
+  // ── 拼写阶段状态 ──
+  const [spellInput, setSpellInput] = useState('');
+  const [genderPick, setGenderPick] = useState<'m' | 'f' | ''>('');
+  const [spellRevealed, setSpellRevealed] = useState<{ correct: boolean; expected: string } | null>(null);
+
+  // ── 子练习阶段状态（拼写对了之后） ──
+  const [subStage, setSubStage] = useState<SubStage | null>(null);
+
+  // ── 词典：lemma → 阴性 / verb conjugation table ──
+  // 形容词阴性 / 变位需要发请求拿
+  const card = queue[idx];
+
+  const loadQueue = async () => {
+    setLoading(true);
+    const rows = (await window.api.words.byIds(wordIds)) as QueueCard[];
+    const shuffled = rows.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    setQueue(shuffled);
+    setIdx(0);
+    setDone(shuffled.length === 0);
+    resetSpellState();
+    setSubStage(null);
+    setLoading(false);
+  };
+
+  const resetSpellState = () => {
+    setSpellInput('');
+    setGenderPick('');
+    setSpellRevealed(null);
+  };
+
+  useEffect(() => { loadQueue(); }, [wordIds]);
+  useEffect(() => {
+    resetSpellState();
+    setSubStage(null);
+  }, [idx, card?.id]);
+
+  if (loading) return <p>加载中…</p>;
+  if (done || !card) {
+    return (
+      <div>
+        <h2>🎉 完成 {queue.length} 张卡片！</h2>
+        <div className="row">
+          <button onClick={loadQueue}>再来一轮</button>
+          <button className="ghost" onClick={onExit}>重新选词</button>
+        </div>
+      </div>
+    );
+  }
+
+  const expectedSpell = card.surface || card.lemma;
+
+  // ───────── 阶段 1: 拼写 ─────────
+
+  const submitSpell = () => {
+    if (card.pos === 'noun' && card.gender && !genderPick) {
+      alert('请先选择阴阳性 (le / la)');
+      return;
+    }
+    const spellOk = fold(spellInput) === fold(expectedSpell);
+    const genderOk = !card.gender || genderPick === card.gender;
+    setSpellRevealed({
+      correct: spellOk && genderOk,
+      expected: expectedSpell + (card.gender ? ` [${card.gender}]` : '')
+    });
+  };
+
+  const advanceWord = (spellCorrect: boolean) => {
+    // 错题压回末尾
+    if (!spellCorrect) {
+      setQueue(q => [...q, card]);
+    }
+    const newQueueLen = queue.length + (spellCorrect ? 0 : 1);
+    if (idx + 1 >= newQueueLen) setDone(true);
+    else setIdx(idx + 1);
+  };
+
+  const writeSpellLog = async (correct: boolean) => {
+    const expected = expectedSpell + (card.gender ? ` [${card.gender}]` : '');
+    const userInput = spellInput.trim() + (genderPick ? ` [${genderPick}]` : '');
+    await window.api.review.submit({
+      word_id: card.id,
+      mode: 'spell',
+      user_input: userInput,
+      expected,
+      rating: correct ? 3 : 1
+    });
+  };
+
+  // 拼写"下一张"按钮
+  const onSpellNext = async () => {
+    if (!spellRevealed) return;
+    await writeSpellLog(spellRevealed.correct);
+
+    // 拼写错 → 不进子练习，直接换下一题
+    if (!spellRevealed.correct) {
+      advanceWord(false);
+      return;
+    }
+
+    // 拼写对 → 看 pos 决定要不要进子练习
+    if (card.pos === 'adj' && config.enableAdj) {
+      // 拉阴性形式
+      const pool = await window.api.practice.buildAdjPool({ word_ids: [card.id] }) as Array<{
+        word: any; masculine: string; feminine: string;
+      }>;
+      const item = pool[0];
+      if (item) {
+        setSubStage({
+          type: 'adj',
+          cells: [
+            { key: 'adj:m', expected: item.masculine, user: '', done: false },
+            { key: 'adj:f', expected: item.feminine, user: '', done: false }
+          ],
+          submitted: false
+        });
+        return;
+      }
+      // 没找到阴性形式 → 跳过子练习
+    }
+
+    if (card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0) {
+      // 为每个时态拉一张表
+      const tenseQueue: { tenseId: string; cells: SubCellAnswer[] }[] = [];
+      for (const tid of config.verbTenseIds) {
+        const table = await window.api.practice.conjugationTable(card.lemma, tid) as Array<{
+          person: number; expected: string | null;
+        }> | null;
+        if (!table) continue;
+        const cells = table
+          .filter(slot => slot.expected)
+          .map(slot => ({
+            key: `verb:${tid}:${slot.person}`,
+            expected: slot.expected!,
+            user: '', done: false
+          }));
+        if (cells.length > 0) tenseQueue.push({ tenseId: tid, cells });
+      }
+      if (tenseQueue.length > 0) {
+        setSubStage({
+          type: 'verb',
+          tenseQueue,
+          currentTenseIdx: 0,
+          cells: tenseQueue[0].cells,
+          submitted: false
+        });
+        return;
+      }
+    }
+
+    // 没有子练习，直接进下一题
+    advanceWord(true);
+  };
+
+  // ───────── 阶段 2: 子练习 (adj / verb) ─────────
+
+  const submitSubRound = async () => {
+    if (!subStage) return;
+    const updated = subStage.cells.map(c => {
+      if (c.done) return c;
+      const correct = fold(c.user) === fold(c.expected);
+      return { ...c, done: correct };
+    });
+    // 写日志：每个 cell 写一条（mode=adj/drill 之类）
+    if (subStage.type === 'adj') {
+      const allDone = updated.every(c => c.done);
+      const userStr = `阳: ${updated.find(c => c.key === 'adj:m')?.user || '(空)'} | 阴: ${updated.find(c => c.key === 'adj:f')?.user || '(空)'}`;
+      const expStr = `阳: ${updated.find(c => c.key === 'adj:m')?.expected} | 阴: ${updated.find(c => c.key === 'adj:f')?.expected}`;
+      // 只在第一次 round 写日志（避免重复填错重复算）
+      if (!subStage.submitted) {
+        await window.api.practice.submitOne({
+          word_id: card.id, mode: 'adj', tense_id: '', person: 0,
+          user_input: userStr, expected: expStr, correct: allDone
+        });
+      }
+      setSubStage({ ...subStage, cells: updated, submitted: true });
+    } else {
+      // verb：当前时态
+      const tid = subStage.tenseQueue![subStage.currentTenseIdx!].tenseId;
+      if (!subStage.submitted) {
+        // 把每个 cell 当 drill 提交一条
+        for (const c of subStage.cells) {
+          const wasCorrect = fold(c.user) === fold(c.expected);
+          await window.api.practice.submitOne({
+            word_id: card.id, mode: 'drill',
+            tense_id: tid,
+            person: parseInt(c.key.split(':')[2], 10),
+            user_input: c.user, expected: c.expected, correct: wasCorrect
+          });
+        }
+      }
+      setSubStage({ ...subStage, cells: updated, submitted: true });
+    }
+  };
+
+  const retryWrong = () => {
+    if (!subStage) return;
+    // 错的 cell 清空 user，让用户重填；对的保留+disabled
+    const cleaned = subStage.cells.map(c => c.done ? c : { ...c, user: '' });
+    setSubStage({ ...subStage, cells: cleaned, submitted: false });
+  };
+
+  const onSubNext = () => {
+    if (!subStage) return;
+    if (subStage.type === 'adj') {
+      // 进入下一个 word
+      setSubStage(null);
+      advanceWord(true);
+    } else {
+      // verb：还有下一个时态吗？
+      const next = subStage.currentTenseIdx! + 1;
+      if (next < subStage.tenseQueue!.length) {
+        setSubStage({
+          ...subStage,
+          currentTenseIdx: next,
+          cells: subStage.tenseQueue![next].cells,
+          submitted: false
+        });
+      } else {
+        setSubStage(null);
+        advanceWord(true);
+      }
+    }
+  };
+
+  const updateCell = (key: string, val: string) => {
+    if (!subStage) return;
+    setSubStage({
+      ...subStage,
+      cells: subStage.cells.map(c => c.key === key ? { ...c, user: val } : c)
+    });
+  };
+
+  // ───────── 渲染 ─────────
+
+  // 子练习阶段渲染
+  if (subStage) {
+    const allDone = subStage.cells.every(c => c.done);
+    const tenseLabel = subStage.type === 'verb'
+      ? `时态 ${subStage.currentTenseIdx! + 1}/${subStage.tenseQueue!.length} · ${subStage.tenseQueue![subStage.currentTenseIdx!].tenseId}`
+      : '阴阳变化';
+
+    return (
+      <div>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <span className="muted">{idx + 1} / {queue.length} · {tenseLabel}</span>
+          <button className="ghost" onClick={() => { setSubStage(null); advanceWord(true); }}>跳过子练习</button>
+        </div>
+
+        <h3 style={{ marginBottom: 4 }}>
+          ✓ {card.lemma} <span className="muted" style={{ fontSize: 14 }}>
+            ({card.translation_zh ?? card.translation_en ?? ''})
+          </span>
+        </h3>
+        <div className="muted" style={{ marginBottom: 12, fontSize: 13 }}>
+          {subStage.type === 'adj' ? '填写阳性 / 阴性形式' : '填写各人称变位'}
+        </div>
+
+        {subStage.cells.map(c => {
+          const label = subStage.type === 'adj'
+            ? (c.key === 'adj:m' ? '阳性 (m)' : '阴性 (f)')
+            : PERSON_LABELS[parseInt(c.key.split(':')[2], 10)];
+          const wrong = subStage.submitted && !c.done;
+          const right = c.done;
+          return (
+            <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <div style={{ width: 130, color: '#666' }}>{label}</div>
+              <div style={{ flex: 1 }}>
+                <input
+                  value={c.user}
+                  disabled={c.done}
+                  onChange={e => updateCell(c.key, e.target.value)}
+                  style={{
+                    background: right ? '#e8f7ee' : (wrong ? '#fdecea' : 'white'),
+                    color: right ? '#1e7c3a' : (wrong ? '#b1261e' : '#1f2330')
+                  }}
+                />
+                {wrong && (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                    ✓ 答案：{c.expected}（再填一次）
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <div className="row" style={{ marginTop: 16 }}>
+          {!subStage.submitted ? (
+            <button onClick={submitSubRound}>提交</button>
+          ) : allDone ? (
+            <button onClick={onSubNext} autoFocus>
+              {subStage.type === 'verb' && subStage.currentTenseIdx! + 1 < subStage.tenseQueue!.length ? '下一时态' : '下一题'}
+            </button>
+          ) : (
+            <>
+              <button onClick={retryWrong} autoFocus>重填错题</button>
+              <button className="ghost" onClick={onSubNext}>跳过本组</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 拼写阶段渲染
+  return (
+    <div>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span className="muted">{idx + 1} / {queue.length}</span>
+        <button className="ghost" onClick={onExit}>退出</button>
+      </div>
+
+      <h2 style={{ marginTop: 0 }}>{card.translation_zh ?? card.translation_en ?? '(无翻���)'}</h2>
+      <div className="muted" style={{ marginBottom: 12 }}>
+        <span className="tag">{card.pos}</span>
+        {card.translation_en && <span>en: {card.translation_en}</span>}
+      </div>
+
+      {card.pos === 'noun' && card.gender && (
+        <div className="row" style={{ gap: 16 }}>
+          {(['m', 'f'] as const).map(g => {
+            const picked = genderPick === g;
+            const expected = card.gender === g;
+            // 揭示后的颜色：选中且正确=绿；选中且错=红；未选但正确（说明用户选错了）=描边绿提示正解
+            let bg = 'transparent', color = '#1f2330', border = '1px solid transparent';
+            if (spellRevealed) {
+              if (picked && expected) { bg = '#e8f7ee'; color = '#1e7c3a'; border = '1px solid #1e7c3a'; }
+              else if (picked && !expected) { bg = '#fdecea'; color = '#b1261e'; border = '1px solid #b1261e'; }
+              else if (!picked && expected) { bg = 'transparent'; color = '#1e7c3a'; border = '1px dashed #1e7c3a'; }
+            }
+            return (
+              <label key={g} style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 12px', borderRadius: 6,
+                background: bg, color, border,
+                cursor: spellRevealed ? 'default' : 'pointer'
+              }}>
+                <input
+                  type="radio"
+                  name="g"
+                  checked={picked}
+                  disabled={!!spellRevealed}
+                  onChange={() => setGenderPick(g)}
+                />
+                {g === 'm' ? 'le (m)' : 'la (f)'}
+                {spellRevealed && picked && (expected ? ' ✓' : ' ✗')}
+                {spellRevealed && !picked && expected && ' ← 正确答案'}
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="row">
+        <div style={{ flex: 1 }}>
+          <label>请输入法语单词</label>
+          <AccentInput
+            value={spellInput}
+            onChange={setSpellInput}
+            disabled={!!spellRevealed}
+            autoFocus
+            placeholder="…"
+            style={spellRevealed ? {
+              background: fold(spellInput) === fold(expectedSpell) ? '#e8f7ee' : '#fdecea',
+              color: fold(spellInput) === fold(expectedSpell) ? '#1e7c3a' : '#b1261e',
+              borderColor: fold(spellInput) === fold(expectedSpell) ? '#1e7c3a' : '#b1261e'
+            } : undefined}
+          />
+        </div>
+      </div>
+
+      {!spellRevealed ? (
+        <div className="row">
+          <button onClick={submitSpell}>提交 / 揭示答案</button>
+          <button className="ghost" onClick={() => { advanceWord(true); }}>跳过</button>
+        </div>
+      ) : (
+        <>
+          <div style={{
+            background: spellRevealed.correct ? '#e8f7ee' : '#fdecea',
+            color: spellRevealed.correct ? '#1e7c3a' : '#b1261e',
+            padding: 12, borderRadius: 8, marginTop: 12
+          }}>
+            <strong>{spellRevealed.correct ? '✓ 正确' : '✗ 答案：' + spellRevealed.expected}</strong>
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button onClick={onSpellNext} autoFocus>
+              {spellRevealed.correct
+                ? (
+                  (card.pos === 'adj' && config.enableAdj)
+                    || (card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0)
+                  ? '继续：变位 / 阴阳' : '下一张'
+                )
+                : '下一张'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 配置面板：选要启用的子练习 + 时态 */
+export function IntegratedConfigScreen({
+  initial, onStart
+}: {
+  initial: IntegratedConfig;
+  onStart: (cfg: IntegratedConfig) => void;
+}) {
+  const [enableVerb, setEnableVerb] = useState(initial.enableVerb);
+  const [enableAdj, setEnableAdj] = useState(initial.enableAdj);
+  const [tenses, setTenses] = useState<TenseDef[]>([]);
+  const [tenseIds, setTenseIds] = useState<Set<string>>(new Set(initial.verbTenseIds));
+
+  useEffect(() => {
+    window.api.practice.tenses().then((t: TenseDef[]) => setTenses(t));
+  }, []);
+
+  return (
+    <div style={{ padding: '20px 8px' }}>
+      <h2 style={{ marginTop: 0 }}>拼写复习配置</h2>
+      <p className="muted">
+        每张卡先做拼写。拼写对了之后，按词性自动追加变位 / 阴阳子练习；都做对才进入下一张。
+      </p>
+
+      <div style={{ marginTop: 20 }}>
+        <h4>启用子练习</h4>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <input type="checkbox" checked={enableAdj} onChange={e => setEnableAdj(e.target.checked)} />
+          <span>形容词：拼写对后填写阳性 + 阴性</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={enableVerb} onChange={e => setEnableVerb(e.target.checked)} />
+          <span>动词：拼写对后按时态填表</span>
+        </label>
+      </div>
+
+      {enableVerb && (
+        <div style={{ marginTop: 16 }}>
+          <h4>选择时态 ({tenseIds.size} / {tenses.length})</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
+            {tenses.map(t => (
+              <label key={t.id} style={{
+                display: 'flex', gap: 8, alignItems: 'center',
+                padding: '6px 10px', borderRadius: 6,
+                background: tenseIds.has(t.id) ? '#eef1fc' : 'transparent',
+                cursor: 'pointer'
+              }}>
+                <input
+                  type="checkbox"
+                  checked={tenseIds.has(t.id)}
+                  onChange={() => {
+                    const next = new Set(tenseIds);
+                    next.has(t.id) ? next.delete(t.id) : next.add(t.id);
+                    setTenseIds(next);
+                  }}
+                />
+                <span><strong>{t.zh}</strong> <span className="muted" style={{ fontSize: 12 }}>{t.fr}</span></span>
+              </label>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 8, gap: 6 }}>
+            <button className="ghost" onClick={() => setTenseIds(new Set(tenses.map(t => t.id)))}>全选</button>
+            <button className="ghost" onClick={() => setTenseIds(new Set())}>清空</button>
+          </div>
+        </div>
+      )}
+
+      <div className="row" style={{ marginTop: 24 }}>
+        <button
+          onClick={() => onStart({ enableVerb, enableAdj, verbTenseIds: [...tenseIds] })}
+          disabled={enableVerb && tenseIds.size === 0}
+          style={{ padding: '10px 24px', fontSize: 15 }}
+        >
+          下一步：选词
+        </button>
+      </div>
+    </div>
+  );
+}

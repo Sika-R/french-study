@@ -1,7 +1,7 @@
 {
   "name": "french-deck",
   "productName": "french-deck",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local French vocabulary trainer with FSRS spaced repetition",
   "main": "out/main/main.js",
   "type": "module",

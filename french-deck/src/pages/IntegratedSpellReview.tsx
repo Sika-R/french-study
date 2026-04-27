@@ -37,6 +37,36 @@ export interface IntegratedConfig {
   verbTenseIds: string[]; // 选定的时态
 }
 
+export const SPELL_SESSION_KEY = 'frenchdeck:spellReview:session:v1';
+
+interface SavedSession {
+  wordIds: number[];
+  config: IntegratedConfig;
+  queue: QueueItem[];
+  idx: number;
+  pendingCardRetry: boolean;
+  /** 当前卡是否已经过了拼写阶段（处于子练习中或刚拼对待按"继续"） */
+  spellRevealed: { correct: boolean; expected: string } | null;
+  spellInput: string;
+  genderPick: 'm' | 'f' | '';
+  subStage: SubStage | null;
+  savedAt: number;
+}
+
+export function loadSavedSpellSession(): SavedSession | null {
+  try {
+    const raw = localStorage.getItem(SPELL_SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as SavedSession;
+    if (!s.wordIds || !s.config || !s.queue) return null;
+    return s;
+  } catch { return null; }
+}
+
+export function clearSavedSpellSession() {
+  try { localStorage.removeItem(SPELL_SESSION_KEY); } catch {}
+}
+
 interface Props {
   wordIds: number[];
   config: IntegratedConfig;
@@ -80,6 +110,8 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   const [idx, setIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const [done, setDone] = useState(false);
+  // 恢复 saved session 时短暂置 true，让 idx-change effect 不清掉刚恢复的 subStage / spellRevealed
+  const restoringRef = useRef(false);
 
   // ── 拼写阶段状态 ──
   const [spellInput, setSpellInput] = useState('');
@@ -105,6 +137,32 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   const loadQueue = async () => {
     setLoading(true);
+    // 优先尝试恢复未完成的会话（顺序无关地比对 word ids 集合）
+    const saved = loadSavedSpellSession();
+    const sameWords = saved
+      && saved.wordIds.length === wordIds.length
+      && (() => {
+        const a = new Set(saved.wordIds);
+        return wordIds.every(id => a.has(id));
+      })();
+    if (saved && sameWords && saved.queue.length > 0 && saved.idx < saved.queue.length) {
+      console.log('[SpellReview] resuming saved session, idx=', saved.idx, '/', saved.queue.length, 'subStage=', !!saved.subStage);
+      restoringRef.current = true;
+      setQueue(saved.queue);
+      setIdx(saved.idx);
+      setPendingCardRetry(saved.pendingCardRetry);
+      setSpellInput(saved.spellInput || '');
+      setGenderPick(saved.genderPick || '');
+      setSpellRevealed(saved.spellRevealed || null);
+      setSubStage(saved.subStage || null);
+      setDone(false);
+      setLoading(false);
+      // 下个 microtask 解锁，让 idx-change effect 不会清空恢复出来的 subStage
+      requestAnimationFrame(() => { restoringRef.current = false; });
+      return;
+    }
+    if (saved) console.log('[SpellReview] saved session NOT used. sameWords=', sameWords, 'queueLen=', saved.queue?.length, 'idx=', saved.idx);
+    // 否则按 wordIds 重新洗牌
     const rows = (await window.api.words.byIds(wordIds)) as QueueCard[];
     const shuffled: QueueItem[] = rows
       .map(c => ({ kind: 'card' as const, card: c }));
@@ -127,21 +185,41 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   };
 
   useEffect(() => { loadQueue(); }, [wordIds]);
+
+  // 持久化进度（包括拼写阶段中间态 + 子练习阶段）
   useEffect(() => {
+    if (loading) return;
+    if (done) {
+      clearSavedSpellSession();
+      return;
+    }
+    if (queue.length === 0) return;
+    try {
+      const data: SavedSession = {
+        wordIds, config, queue, idx, pendingCardRetry,
+        spellInput, genderPick, spellRevealed, subStage,
+        savedAt: Date.now()
+      };
+      localStorage.setItem(SPELL_SESSION_KEY, JSON.stringify(data));
+    } catch {}
+  }, [queue, idx, pendingCardRetry, loading, done, wordIds, config, spellInput, genderPick, spellRevealed, subStage]);
+  useEffect(() => {
+    if (restoringRef.current) return; // 恢复 session 时不清状态
     resetSpellState();
     setSubStage(null);
     setPendingCardRetry(false);
     // 如果当前 item 是 retry，直接进 sub stage，不走拼写
-    if (currentItem?.kind === 'retry') {
+    const item = queue[idx];
+    if (item?.kind === 'retry') {
       setSubStage({
-        type: currentItem.subType,
-        cells: currentItem.cells,
+        type: item.subType,
+        cells: item.cells,
         submitted: false,
         isRetry: true,
-        retryTenseId: currentItem.tenseId
+        retryTenseId: item.tenseId
       });
     }
-  }, [idx, currentItem]);
+  }, [idx, queue]);
 
   // 每张新卡：根据词性把焦点放在 le radio (noun) 或拼写 input (其它)
   useEffect(() => {

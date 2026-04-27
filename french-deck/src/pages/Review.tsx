@@ -4,7 +4,7 @@ import Practice from './Practice';
 import AdjPractice from './AdjPractice';
 import NounPractice from './NounPractice';
 import NoteReview from './NoteReview';
-import IntegratedSpellReview, { IntegratedConfigScreen, type IntegratedConfig } from './IntegratedSpellReview';
+import IntegratedSpellReview, { IntegratedConfigScreen, type IntegratedConfig, clearSavedSpellSession, loadSavedSpellSession } from './IntegratedSpellReview';
 import SelectWordsDialog from '../components/SelectWordsDialog';
 import SelectNotesDialog from '../components/SelectNotesDialog';
 
@@ -38,6 +38,15 @@ export default function Review() {
   const [noteIds, setNoteIds] = useState<number[] | null>(null);
   const [showDialog, setShowDialog] = useState<'spell' | 'verb' | 'adj' | 'noun' | 'notes' | null>(null);
 
+  // 启动时如果存有未完成的拼写会话，自动恢复 wordIds + config（IntegratedSpellReview 内部会接续 queue 进度）
+  useEffect(() => {
+    const saved = loadSavedSpellSession();
+    if (saved) {
+      setSpellConfig(saved.config);
+      setSpellWordIds(saved.wordIds);
+    }
+  }, []);
+
   return (
     <div className="card">
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid #e6e8ef', paddingBottom: 12, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -64,13 +73,13 @@ export default function Review() {
           <div>
             <div className="row" style={{ marginBottom: 12, justifyContent: 'flex-end' }}>
               <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>已选 {spellWordIds.length} 个词</span>
-              <button className="ghost" onClick={() => setSpellWordIds(null)}>重新选词</button>
-              <button className="ghost" onClick={() => { setSpellWordIds(null); setSpellConfig(null); }}>重新配置</button>
+              <button className="ghost" onClick={() => { clearSavedSpellSession(); setSpellWordIds(null); }}>重新选词</button>
+              <button className="ghost" onClick={() => { clearSavedSpellSession(); setSpellWordIds(null); setSpellConfig(null); }}>重新配置</button>
             </div>
             <IntegratedSpellReview
               wordIds={spellWordIds}
               config={spellConfig}
-              onExit={() => setSpellWordIds(null)}
+              onExit={() => { clearSavedSpellSession(); setSpellWordIds(null); }}
             />
           </div>
         )

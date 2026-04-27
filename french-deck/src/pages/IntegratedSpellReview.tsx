@@ -51,6 +51,17 @@ interface SubCellAnswer {
   done: boolean;      // 已经做对
 }
 
+/** queue 里的一项：要么是完整卡片（拼写+所有子练习），要么是只做指定错题的补错组 */
+type QueueItem =
+  | { kind: 'card'; card: QueueCard; spellOnly?: boolean }
+  | {
+      kind: 'retry';
+      card: QueueCard;
+      subType: 'adj' | 'verb';
+      tenseId?: string;          // verb 用，标注来源（显示）
+      cells: SubCellAnswer[];    // 已经清空 user/done 的，待重做
+    };
+
 /** 每个 word 进入子练习阶段的内部状态 */
 interface SubStage {
   type: 'adj' | 'verb';
@@ -60,10 +71,12 @@ interface SubStage {
   currentTenseIdx?: number;
   cells: SubCellAnswer[];   // 当前正在 render 的 cells
   submitted: boolean;        // 当前 round 是否已经提交（决定显示对错色）
+  isRetry?: boolean;         // 是否是 retry 模式（只做几个 cells，完成后回到 queue）
+  retryTenseId?: string;     // retry 模式时显示用的来源时态
 }
 
 export default function IntegratedSpellReview({ wordIds, config, onExit }: Props) {
-  const [queue, setQueue] = useState<QueueCard[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [idx, setIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const [done, setDone] = useState(false);
@@ -84,13 +97,17 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   // ── 子练习阶段状态（拼写对了之后） ──
   const [subStage, setSubStage] = useState<SubStage | null>(null);
+  // 拼写答错时记一下：等子练习也走完，再把整张卡压回末尾
+  const [pendingCardRetry, setPendingCardRetry] = useState(false);
 
-  const card = queue[idx];
+  const card = queue[idx]?.kind === 'card' ? queue[idx].card : (queue[idx] as Extract<QueueItem, { kind: 'retry' }> | undefined)?.card;
+  const currentItem = queue[idx];
 
   const loadQueue = async () => {
     setLoading(true);
     const rows = (await window.api.words.byIds(wordIds)) as QueueCard[];
-    const shuffled = rows.slice();
+    const shuffled: QueueItem[] = rows
+      .map(c => ({ kind: 'card' as const, card: c }));
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
@@ -113,7 +130,18 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   useEffect(() => {
     resetSpellState();
     setSubStage(null);
-  }, [idx, card?.id]);
+    setPendingCardRetry(false);
+    // 如果当前 item 是 retry，直接进 sub stage，不走拼写
+    if (currentItem?.kind === 'retry') {
+      setSubStage({
+        type: currentItem.subType,
+        cells: currentItem.cells,
+        submitted: false,
+        isRetry: true,
+        retryTenseId: currentItem.tenseId
+      });
+    }
+  }, [idx, currentItem]);
 
   // 每张新卡：根据词性把焦点放在 le radio (noun) 或拼写 input (其它)
   useEffect(() => {
@@ -199,11 +227,38 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   };
 
   const advanceWord = (spellCorrect: boolean) => {
-    // 错题压回末尾
-    if (!spellCorrect) {
-      setQueue(q => [...q, card]);
+    // 拼写错的整张卡压回末尾（重新走拼写）
+    if (!spellCorrect && card) {
+      setQueue(q => [...q, { kind: 'card', card }]);
     }
     const newQueueLen = queue.length + (spellCorrect ? 0 : 1);
+    if (idx + 1 >= newQueueLen) setDone(true);
+    else setIdx(idx + 1);
+  };
+
+  /** 把错的子练习 cells 作为独立 retry entry 追加到队列末尾，然后进下一个 queue item */
+  const advanceSubWithRetries = (retries: { tenseId?: string; cells: SubCellAnswer[] }[]) => {
+    if (!card) return;
+    const subType: 'adj' | 'verb' = subStage?.type ?? 'verb';
+    const additions: QueueItem[] = retries
+      .filter(r => r.cells.length > 0)
+      .map(r => ({
+        kind: 'retry',
+        card,
+        subType,
+        tenseId: r.tenseId,
+        cells: r.cells.map(c => ({ ...c, user: '', done: false }))
+      }));
+    // 如果拼写阶段就错了，把整张卡也压回末尾（重新走拼写）
+    // 标记 spellOnly：下次只做拼写，不再重复子练习（错的子练习已经作为 retry entry 单独压回）
+    if (pendingCardRetry) {
+      additions.push({ kind: 'card', card, spellOnly: true });
+      setPendingCardRetry(false);
+    }
+    if (additions.length > 0) {
+      setQueue(q => [...q, ...additions]);
+    }
+    const newQueueLen = queue.length + additions.length;
     if (idx + 1 >= newQueueLen) setDone(true);
     else setIdx(idx + 1);
   };
@@ -225,14 +280,16 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     if (!spellRevealed) return;
     await writeSpellLog(spellRevealed.correct);
 
-    // 拼写错 → 不进子练习，直接换下一题
+    // 如果拼写错了，记下来：子练习走完之后整张卡再压回末尾
     if (!spellRevealed.correct) {
-      advanceWord(false);
-      return;
+      setPendingCardRetry(true);
     }
 
-    // 拼写对 → 看 pos 决定要不要进子练习
-    if (card.pos === 'adj' && config.enableAdj) {
+    // spellOnly 模式（之前拼写错的回炉重做拼写）：不再走子练习
+    const spellOnly = currentItem?.kind === 'card' && currentItem.spellOnly;
+
+    // 不论拼写对错，都按 pos 决定要不要进子练习（让你练完变位/阴阳）
+    if (!spellOnly && card.pos === 'adj' && config.enableAdj) {
       // 拉阴性形式
       const pool = await window.api.practice.buildAdjPool({ word_ids: [card.id] }) as Array<{
         word: any; masculine: string; feminine: string;
@@ -252,7 +309,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
       // 没找到阴性形式 → 跳过子练习
     }
 
-    if (card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0) {
+    if (!spellOnly && card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0) {
       // 为每个时态拉一张表
       const tenseQueue: { tenseId: string; cells: SubCellAnswer[] }[] = [];
       for (const tid of config.verbTenseIds) {
@@ -281,8 +338,9 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
       }
     }
 
-    // 没有子练习，直接进下一题
-    advanceWord(true);
+    // 没有子练习，直接进下一题（如果拼写错了就用 pendingCardRetry 走错路径）
+    advanceWord(!pendingCardRetry && spellRevealed.correct);
+    setPendingCardRetry(false);
   };
 
   // ───────── 阶段 2: 子练习 (adj / verb) ─────────
@@ -308,8 +366,10 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
       }
       setSubStage({ ...subStage, cells: updated, submitted: true });
     } else {
-      // verb：当前时态
-      const tid = subStage.tenseQueue![subStage.currentTenseIdx!].tenseId;
+      // verb：当前时态（retry 模式没有 tenseQueue，用 retryTenseId）
+      const tid = subStage.isRetry
+        ? (subStage.retryTenseId ?? '')
+        : subStage.tenseQueue![subStage.currentTenseIdx!].tenseId;
       if (!subStage.submitted) {
         // 把每个 cell 当 drill 提交一条
         for (const c of subStage.cells) {
@@ -336,24 +396,53 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   const onSubNext = () => {
     if (!subStage) return;
-    if (subStage.type === 'adj') {
-      // 进入下一个 word
+
+    // 收集本组中错的 cells
+    const wrongCells = subStage.cells.filter(c => !c.done);
+
+    if (subStage.isRetry) {
+      // 这是 retry 组：错了就再追加一个 retry entry 到末尾，对了就直接下一个
       setSubStage(null);
-      advanceWord(true);
+      advanceSubWithRetries(wrongCells.length > 0
+        ? [{ tenseId: subStage.retryTenseId, cells: wrongCells }]
+        : []);
+      return;
+    }
+
+    if (subStage.type === 'adj') {
+      // 完成本组：错的推到末尾作为独立 retry，对了直接下一个 queue item
+      setSubStage(null);
+      advanceSubWithRetries(wrongCells.length > 0
+        ? [{ cells: wrongCells }]
+        : []);
+      return;
+    }
+
+    // verb：当前时态完成，把错的收集起来；如果还有下一个时态继续做
+    const tq = subStage.tenseQueue!;
+    const currentTid = tq[subStage.currentTenseIdx!].tenseId;
+    // 累积本词所有时态的错（保留在 subStage.pendingRetries... 但用闭包暂存太复杂）
+    // 简化方案：每个时态的错单独成一个 retry，立刻 push 到 queue 末尾（在最后一个时态时）
+    // 用一个临时缓冲存到 subStage 上
+    const accumulated = ((subStage as any)._accumulatedRetries as { tenseId: string; cells: SubCellAnswer[] }[] | undefined) ?? [];
+    if (wrongCells.length > 0) {
+      accumulated.push({ tenseId: currentTid, cells: wrongCells });
+    }
+
+    const next = subStage.currentTenseIdx! + 1;
+    if (next < tq.length) {
+      setSubStage({
+        ...subStage,
+        currentTenseIdx: next,
+        cells: tq[next].cells,
+        submitted: false,
+        // 保存累积的 retries
+        ...({ _accumulatedRetries: accumulated } as any)
+      });
     } else {
-      // verb：还有下一个时态吗？
-      const next = subStage.currentTenseIdx! + 1;
-      if (next < subStage.tenseQueue!.length) {
-        setSubStage({
-          ...subStage,
-          currentTenseIdx: next,
-          cells: subStage.tenseQueue![next].cells,
-          submitted: false
-        });
-      } else {
-        setSubStage(null);
-        advanceWord(true);
-      }
+      // 所有时态走完 → 把所有 retries 一次性推到队尾
+      setSubStage(null);
+      advanceSubWithRetries(accumulated);
     }
   };
 
@@ -391,8 +480,8 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
         };
       }
       if (lockMs > 0) return null;
-      const allDone = subStage.cells.every(c => c.done);
-      return allDone ? onSubNext : retryWrong;
+      // 提交后：直接进下一组（错的会被自动追加到末尾）
+      return onSubNext;
     }
     // 拼写阶段
     if (!spellRevealed) return submitSpell;
@@ -405,26 +494,31 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   // 子练习阶段渲染
   if (subStage) {
     const allDone = subStage.cells.every(c => c.done);
-    const tenseLabel = subStage.type === 'verb'
-      ? `时态 ${subStage.currentTenseIdx! + 1}/${subStage.tenseQueue!.length} · ${subStage.tenseQueue![subStage.currentTenseIdx!].tenseId}`
-      : '阴阳变化';
+    const headerTag = subStage.isRetry
+      ? `🔁 补错${subStage.retryTenseId ? ` · ${subStage.retryTenseId}` : ''}`
+      : (subStage.type === 'verb'
+        ? `时态 ${subStage.currentTenseIdx! + 1}/${subStage.tenseQueue!.length} · ${subStage.tenseQueue![subStage.currentTenseIdx!].tenseId}`
+        : '阴阳变化');
 
     return (
       <div>
         <div className="row" style={{ justifyContent: 'space-between' }}>
-          <span className="muted">{idx + 1} / {queue.length} · {tenseLabel}</span>
-          <button className="ghost" onClick={() => { setSubStage(null); advanceWord(true); }}>跳过子练习</button>
+          <span className="muted">{idx + 1} / {queue.length} · {headerTag}</span>
+          <button className="ghost" tabIndex={-1} onClick={() => {
+            setSubStage(null);
+            // 跳过：不追加 retry，进下一个
+            advanceSubWithRetries([]);
+          }}>跳过本组</button>
         </div>
 
         <h3 style={{ marginBottom: 4 }}>
-          ✓ {card.lemma} <span className="muted" style={{ fontSize: 14 }}>
-            ({card.translation_zh ?? card.translation_en ?? ''})
+          ✓ {card!.lemma} <span className="muted" style={{ fontSize: 14 }}>
+            ({card!.translation_zh ?? card!.translation_en ?? ''})
           </span>
         </h3>
         <div className="muted" style={{ marginBottom: 12, fontSize: 13 }}>
-          {subStage.type === 'adj' ? '填写阳性 / 阴性形式' : '填写各人称变位'}
+          {subStage.isRetry ? '只重做之前错的几个' : (subStage.type === 'adj' ? '填写阳性 / 阴性形式' : '填写各人称变位')}
         </div>
-
         {subStage.cells.map((c, i) => {
           const label = subStage.type === 'adj'
             ? (c.key === 'adj:m' ? '阳性 (m)' : '阴性 (f)')
@@ -461,19 +555,15 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
         <div className="row" style={{ marginTop: 16 }}>
           {!subStage.submitted ? (
-            <button onClick={submitSubRound}>提交</button>
-          ) : allDone ? (
-            <button onClick={onSubNext} disabled={lockMs > 0}>
-              {lockMs > 0 ? `${(lockMs / 1000).toFixed(1)}s 后可点` :
-                (subStage.type === 'verb' && subStage.currentTenseIdx! + 1 < subStage.tenseQueue!.length ? '下一时态' : '下一题')}
-            </button>
+            <button tabIndex={-1} onClick={submitSubRound}>提交</button>
           ) : (
-            <>
-              <button onClick={retryWrong} disabled={lockMs > 0}>
-                {lockMs > 0 ? `${(lockMs / 1000).toFixed(1)}s 后可点` : '重填错题'}
-              </button>
-              <button className="ghost" onClick={onSubNext} disabled={lockMs > 0}>跳过本组</button>
-            </>
+            <button tabIndex={-1} onClick={onSubNext} disabled={lockMs > 0}>
+              {lockMs > 0 ? `${(lockMs / 1000).toFixed(1)}s 后可点` :
+                (allDone
+                  ? (subStage.type === 'verb' && !subStage.isRetry && subStage.currentTenseIdx! + 1 < subStage.tenseQueue!.length
+                      ? '下一时态' : '下一题')
+                  : '下一题（错的会在最后重做）')}
+            </button>
           )}
         </div>
       </div>

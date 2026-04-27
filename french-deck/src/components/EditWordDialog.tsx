@@ -18,6 +18,8 @@ interface Props {
 }
 
 export default function EditWordDialog({ word, onClose, onSaved }: Props) {
+  const [pos, setPos] = useState(word.pos);
+  const [gender, setGender] = useState<'m' | 'f' | ''>(word.gender ?? '');
   const [zh, setZh] = useState(word.translation_zh ?? '');
   const [en, setEn] = useState(word.translation_en ?? '');
   const [example, setExample] = useState(word.example_fr ?? '');
@@ -37,6 +39,8 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
     setError(null);
     try {
       const patch = {
+        pos: pos.trim() || word.pos,
+        gender: pos === 'noun' ? (gender || null) : null,
         translation_zh: zh.trim() || null,
         translation_en: en.trim() || null,
         example_fr: example.trim() || null
@@ -70,13 +74,34 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
             <strong>{word.lemma}</strong>
             {word.surface !== word.lemma && <span className="muted"> ({word.surface})</span>}
           </div>
-          <div style={{ marginTop: 4 }}>
-            <span className="tag">{word.pos}</span>
-            {word.gender === 'm' && <span className="tag gender-m">le</span>}
-            {word.gender === 'f' && <span className="tag gender-f">la</span>}
-            <span className="muted" style={{ fontSize: 12, marginLeft: 6 }}>
-              （核心字段不可改；要改请重新录入同 lemma 触发覆盖）
-            </span>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            （lemma / surface 不可改；要改请重新录入同 lemma 触发覆盖）
+          </div>
+        </div>
+
+        <div className="row">
+          <div style={{ width: 180 }}>
+            <label>词性</label>
+            <select value={pos} onChange={e => setPos(e.target.value)}>
+              <option value="noun">名词 noun</option>
+              <option value="verb">动词 verb</option>
+              <option value="adj">形容词 adj</option>
+              <option value="adv">副词 adv</option>
+              <option value="pronoun">代词</option>
+              <option value="prep">介词</option>
+              <option value="conj">连词</option>
+              <option value="det">限定词</option>
+              <option value="interj">叹词</option>
+              <option value="other">其它</option>
+            </select>
+          </div>
+          <div style={{ width: 160 }}>
+            <label>性别 (名词)</label>
+            <select value={gender} onChange={e => setGender(e.target.value as any)} disabled={pos !== 'noun'}>
+              <option value="">—</option>
+              <option value="m">阳 m (le)</option>
+              <option value="f">阴 f (la)</option>
+            </select>
           </div>
         </div>
 

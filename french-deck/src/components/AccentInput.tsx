@@ -1,4 +1,4 @@
-import { useRef, CSSProperties } from 'react';
+import { useRef, CSSProperties, KeyboardEvent, MutableRefObject, useEffect } from 'react';
 
 const ACCENTS = ['é', 'è', 'ê', 'ë', 'à', 'â', 'î', 'ï', 'ô', 'û', 'ù', 'ü', 'ç', 'œ', 'æ'];
 
@@ -9,10 +9,19 @@ interface Props {
   autoFocus?: boolean;
   disabled?: boolean;
   style?: CSSProperties;
+  onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
+  /** 暴露内部 input element（供外层 focus 用） */
+  inputRef?: MutableRefObject<HTMLInputElement | null>;
+  tabIndex?: number;
 }
 
-export default function AccentInput({ value, onChange, placeholder, autoFocus, disabled, style }: Props) {
+export default function AccentInput({ value, onChange, placeholder, autoFocus, disabled, style, onKeyDown, inputRef, tabIndex }: Props) {
   const ref = useRef<HTMLInputElement>(null);
+
+  // 把内部 ref 同步到外面给的 ref（每次 render ���）
+  useEffect(() => {
+    if (inputRef) inputRef.current = ref.current;
+  });
 
   const insert = (ch: string) => {
     if (disabled) return;
@@ -36,14 +45,16 @@ export default function AccentInput({ value, onChange, placeholder, autoFocus, d
         value={value}
         autoFocus={autoFocus}
         disabled={disabled}
+        tabIndex={tabIndex}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
         style={style}
       />
       {!disabled && (
         <div className="accent-bar">
           {ACCENTS.map(c => (
-            <button key={c} type="button" onClick={() => insert(c)}>{c}</button>
+            <button key={c} type="button" tabIndex={-1} onClick={() => insert(c)}>{c}</button>
           ))}
         </div>
       )}

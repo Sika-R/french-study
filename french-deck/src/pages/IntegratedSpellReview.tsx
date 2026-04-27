@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import AccentInput from '../components/AccentInput';
 import { fold } from '../utils/fold';
 
@@ -72,12 +72,19 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   const [spellInput, setSpellInput] = useState('');
   const [genderPick, setGenderPick] = useState<'m' | 'f' | ''>('');
   const [spellRevealed, setSpellRevealed] = useState<{ correct: boolean; expected: string } | null>(null);
+  // 揭示答案后的短暂"防误按"窗口：800ms 内不能点下一张/下一时态，避免连按 Enter 直接跳过
+  const [revealLockUntil, setRevealLockUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (revealLockUntil <= Date.now()) return;
+    const t = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(t);
+  }, [revealLockUntil]);
+  const lockMs = Math.max(0, revealLockUntil - now);
 
   // ── 子练习阶段状态（拼写对了之后） ──
   const [subStage, setSubStage] = useState<SubStage | null>(null);
 
-  // ── 词典：lemma → 阴性 / verb conjugation table ──
-  // 形容词阴性 / 变位需要发请求拿
   const card = queue[idx];
 
   const loadQueue = async () => {
@@ -108,6 +115,57 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     setSubStage(null);
   }, [idx, card?.id]);
 
+  // 每张新卡：根据词性把焦点放在 le radio (noun) 或拼写 input (其它)
+  useEffect(() => {
+    if (loading || done || !card || subStage || spellRevealed) return;
+    requestAnimationFrame(() => {
+      if (card.pos === 'noun' && card.gender) {
+        const el = document.querySelector<HTMLInputElement>(`input[type="radio"][data-gender="m"]`);
+        el?.focus();
+      } else {
+        spellInputRef.current?.focus();
+      }
+    });
+  }, [idx, card?.id, loading, done, subStage, spellRevealed]);
+
+  // Enter 键全局推进；同时实现"在拼写阶段，无论焦点在哪，打字直接进 spell input"
+  const enterHandlerRef = useRef<(() => void) | null>(null);
+  const spellInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      // textarea 不拦截
+      if (target?.tagName === 'TEXTAREA') return;
+
+      // ── 拼写阶段且未揭示：可打印字符 / Backspace 自动重定向到 spell input ──
+      if (
+        !subStage && !spellRevealed &&
+        spellInputRef.current && document.activeElement !== spellInputRef.current
+      ) {
+        const isPrintable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
+        const isBackspace = e.key === 'Backspace';
+        if (isPrintable || isBackspace) {
+          e.preventDefault();
+          spellInputRef.current.focus();
+          if (isPrintable) setSpellInput(s => s + e.key);
+          else setSpellInput(s => s.slice(0, -1));
+          return;
+        }
+      }
+
+      // ── Enter 全局推进 ──
+      if (e.key === 'Enter') {
+        const fn = enterHandlerRef.current;
+        if (fn) {
+          e.preventDefault();
+          fn();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [subStage, spellRevealed]);
+
   if (loading) return <p>加载中…</p>;
   if (done || !card) {
     return (
@@ -121,7 +179,8 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     );
   }
 
-  const expectedSpell = card.surface || card.lemma;
+  // 动词考原型 lemma；其它词考 surface（用户输入的形式 = 单数 / 阳性）
+  const expectedSpell = card.pos === 'verb' ? card.lemma : (card.surface || card.lemma);
 
   // ───────── 阶段 1: 拼写 ─────────
 
@@ -136,6 +195,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
       correct: spellOk && genderOk,
       expected: expectedSpell + (card.gender ? ` [${card.gender}]` : '')
     });
+    setRevealLockUntil(Date.now() + 800);
   };
 
   const advanceWord = (spellCorrect: boolean) => {
@@ -264,6 +324,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
       }
       setSubStage({ ...subStage, cells: updated, submitted: true });
     }
+    setRevealLockUntil(Date.now() + 800);
   };
 
   const retryWrong = () => {
@@ -304,6 +365,41 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     });
   };
 
+  // 决定 Enter 当前应该触发什么动作（每次渲染都重新绑定，以便引用最新闭包）
+  enterHandlerRef.current = (() => {
+    if (loading || done || !card) return null;
+    if (subStage) {
+      // 子练习阶段
+      if (!subStage.submitted) {
+        // 未提交：Enter 在 input 间推进焦点；最后一个未 done 的 input 触发提交
+        return () => {
+          const active = document.activeElement as HTMLElement | null;
+          const idxAttr = active?.getAttribute('data-cell-idx');
+          // 下一个未 done 的 cell index（在当前之后）
+          const fromIdx = idxAttr ? parseInt(idxAttr, 10) : -1;
+          const nextIdx = subStage.cells.findIndex(
+            (c, i) => i > fromIdx && !c.done
+          );
+          if (nextIdx >= 0) {
+            const el = document.querySelector<HTMLInputElement>(
+              `input[data-cell-idx="${nextIdx}"]`
+            );
+            if (el) { el.focus(); el.select(); return; }
+          }
+          // 没有更下面的未 done 输入框 → 提交
+          submitSubRound();
+        };
+      }
+      if (lockMs > 0) return null;
+      const allDone = subStage.cells.every(c => c.done);
+      return allDone ? onSubNext : retryWrong;
+    }
+    // 拼写阶段
+    if (!spellRevealed) return submitSpell;
+    if (lockMs > 0) return null;
+    return onSpellNext;
+  })();
+
   // ───────── 渲染 ─────────
 
   // 子练习阶段渲染
@@ -329,19 +425,24 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
           {subStage.type === 'adj' ? '填写阳性 / 阴性形式' : '填写各人称变位'}
         </div>
 
-        {subStage.cells.map(c => {
+        {subStage.cells.map((c, i) => {
           const label = subStage.type === 'adj'
             ? (c.key === 'adj:m' ? '阳性 (m)' : '阴性 (f)')
             : PERSON_LABELS[parseInt(c.key.split(':')[2], 10)];
           const wrong = subStage.submitted && !c.done;
           const right = c.done;
+          // 第一个未 done 的 input 自动 focus（页面/重填后聚焦）
+          const firstUnfinishedIdx = subStage.cells.findIndex(x => !x.done);
+          const shouldAutoFocus = !subStage.submitted && i === firstUnfinishedIdx;
           return (
             <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
               <div style={{ width: 130, color: '#666' }}>{label}</div>
               <div style={{ flex: 1 }}>
                 <input
+                  data-cell-idx={i}
                   value={c.user}
                   disabled={c.done}
+                  autoFocus={shouldAutoFocus}
                   onChange={e => updateCell(c.key, e.target.value)}
                   style={{
                     background: right ? '#e8f7ee' : (wrong ? '#fdecea' : 'white'),
@@ -362,13 +463,16 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
           {!subStage.submitted ? (
             <button onClick={submitSubRound}>提交</button>
           ) : allDone ? (
-            <button onClick={onSubNext} autoFocus>
-              {subStage.type === 'verb' && subStage.currentTenseIdx! + 1 < subStage.tenseQueue!.length ? '下一时态' : '下一题'}
+            <button onClick={onSubNext} disabled={lockMs > 0}>
+              {lockMs > 0 ? `${(lockMs / 1000).toFixed(1)}s 后可点` :
+                (subStage.type === 'verb' && subStage.currentTenseIdx! + 1 < subStage.tenseQueue!.length ? '下一时态' : '下一题')}
             </button>
           ) : (
             <>
-              <button onClick={retryWrong} autoFocus>重填错题</button>
-              <button className="ghost" onClick={onSubNext}>跳过本组</button>
+              <button onClick={retryWrong} disabled={lockMs > 0}>
+                {lockMs > 0 ? `${(lockMs / 1000).toFixed(1)}s 后可点` : '重填错题'}
+              </button>
+              <button className="ghost" onClick={onSubNext} disabled={lockMs > 0}>跳过本组</button>
             </>
           )}
         </div>
@@ -381,7 +485,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     <div>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <span className="muted">{idx + 1} / {queue.length}</span>
-        <button className="ghost" onClick={onExit}>退出</button>
+        <button className="ghost" tabIndex={-1} onClick={onExit}>退出</button>
       </div>
 
       <h2 style={{ marginTop: 0 }}>{card.translation_zh ?? card.translation_en ?? '(无翻���)'}</h2>
@@ -412,9 +516,27 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
                 <input
                   type="radio"
                   name="g"
+                  data-gender={g}
                   checked={picked}
                   disabled={!!spellRevealed}
+                  tabIndex={0}
+                  autoFocus={g === 'm' && !spellRevealed}
                   onChange={() => setGenderPick(g)}
+                  onKeyDown={(e) => {
+                    if (spellRevealed) return;
+                    // Tab 在 le ↔ la 之间循环切换并自动选中
+                    if (e.key === 'Tab') {
+                      e.preventDefault();
+                      const other = g === 'm' ? 'f' : 'm';
+                      setGenderPick(other);
+                      requestAnimationFrame(() => {
+                        const el = document.querySelector<HTMLInputElement>(
+                          `input[type="radio"][data-gender="${other}"]`
+                        );
+                        el?.focus();
+                      });
+                    }
+                  }}
                 />
                 {g === 'm' ? 'le (m)' : 'la (f)'}
                 {spellRevealed && picked && (expected ? ' ✓' : ' ✗')}
@@ -429,11 +551,25 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
         <div style={{ flex: 1 }}>
           <label>请输入法语单词</label>
           <AccentInput
+            inputRef={spellInputRef}
             value={spellInput}
             onChange={setSpellInput}
             disabled={!!spellRevealed}
-            autoFocus
             placeholder="…"
+            tabIndex={-1}
+            onKeyDown={(e) => {
+              // 在 input 里按 Tab 也跳到 radio
+              if (e.key === 'Tab' && card.pos === 'noun' && card.gender && !spellRevealed) {
+                e.preventDefault();
+                const target = e.shiftKey ? 'f' : 'm';
+                setGenderPick(target);
+                requestAnimationFrame(() => {
+                  document.querySelector<HTMLInputElement>(
+                    `input[type="radio"][data-gender="${target}"]`
+                  )?.focus();
+                });
+              }
+            }}
             style={spellRevealed ? {
               background: fold(spellInput) === fold(expectedSpell) ? '#e8f7ee' : '#fdecea',
               color: fold(spellInput) === fold(expectedSpell) ? '#1e7c3a' : '#b1261e',
@@ -445,8 +581,8 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
       {!spellRevealed ? (
         <div className="row">
-          <button onClick={submitSpell}>提交 / 揭示答案</button>
-          <button className="ghost" onClick={() => { advanceWord(true); }}>跳过</button>
+          <button tabIndex={-1} onClick={submitSpell}>提交 / 揭示答案</button>
+          <button className="ghost" tabIndex={-1} onClick={() => { advanceWord(true); }}>跳过</button>
         </div>
       ) : (
         <>
@@ -458,14 +594,15 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
             <strong>{spellRevealed.correct ? '✓ 正确' : '✗ 答案：' + spellRevealed.expected}</strong>
           </div>
           <div className="row" style={{ marginTop: 12 }}>
-            <button onClick={onSpellNext} autoFocus>
-              {spellRevealed.correct
-                ? (
-                  (card.pos === 'adj' && config.enableAdj)
-                    || (card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0)
-                  ? '继续：变位 / 阴阳' : '下一张'
-                )
-                : '下一张'}
+            <button onClick={onSpellNext} disabled={lockMs > 0} tabIndex={-1}>
+              {lockMs > 0 ? `${(lockMs / 1000).toFixed(1)}s 后可点` :
+                (spellRevealed.correct
+                  ? (
+                    (card.pos === 'adj' && config.enableAdj)
+                      || (card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0)
+                    ? '继续：变位 / 阴阳' : '下一张'
+                  )
+                  : '下一张')}
             </button>
           </div>
         </>

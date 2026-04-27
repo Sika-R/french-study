@@ -27,13 +27,20 @@ body {
 .sidebar a:hover { background: #2c3142; }
 .sidebar a.active { background: #4361ee; color: white; }
 
-.main { flex: 1; padding: 32px; overflow-y: auto; }
+.main {
+  flex: 1;
+  padding: 32px;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+}
 .card {
   background: white;
   border-radius: 10px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  max-width: 700px;
+  width: 100%;
+  max-width: 1100px;
 }
 .row { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
 label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }

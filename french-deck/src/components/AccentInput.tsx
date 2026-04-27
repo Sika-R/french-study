@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, CSSProperties } from 'react';
 
 const ACCENTS = ['é', 'è', 'ê', 'ë', 'à', 'â', 'î', 'ï', 'ô', 'û', 'ù', 'ü', 'ç', 'œ', 'æ'];
 
@@ -7,12 +7,15 @@ interface Props {
   onChange: (v: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
+  disabled?: boolean;
+  style?: CSSProperties;
 }
 
-export default function AccentInput({ value, onChange, placeholder, autoFocus }: Props) {
+export default function AccentInput({ value, onChange, placeholder, autoFocus, disabled, style }: Props) {
   const ref = useRef<HTMLInputElement>(null);
 
   const insert = (ch: string) => {
+    if (disabled) return;
     const el = ref.current;
     if (!el) return;
     const start = el.selectionStart ?? value.length;
@@ -32,14 +35,18 @@ export default function AccentInput({ value, onChange, placeholder, autoFocus }:
         ref={ref}
         value={value}
         autoFocus={autoFocus}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        style={style}
       />
-      <div className="accent-bar">
-        {ACCENTS.map(c => (
-          <button key={c} type="button" onClick={() => insert(c)}>{c}</button>
-        ))}
-      </div>
+      {!disabled && (
+        <div className="accent-bar">
+          {ACCENTS.map(c => (
+            <button key={c} type="button" onClick={() => insert(c)}>{c}</button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

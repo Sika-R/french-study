@@ -145,7 +145,7 @@ export default function AddWord() {
   };
 
   return (
-    <div className="card">
+    <div>
       <h2 style={{ marginTop: 0 }}>录入新单词</h2>
 
       <div className="row">

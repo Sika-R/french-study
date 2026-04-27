@@ -35,6 +35,7 @@ function mapPos(cgram: string): LexPos {
 
 class LexiqueIndex {
   private bySurface: Map<string, LexEntry[]> = new Map();
+  private byLemma: Map<string, LexEntry[]> = new Map();
   private loaded = false;
   private loadingPromise: Promise<void> | null = null;
 
@@ -86,9 +87,13 @@ class LexiqueIndex {
       const list = this.bySurface.get(surface);
       if (list) list.push(entry);
       else this.bySurface.set(surface, [entry]);
+
+      const lemmaList = this.byLemma.get(lemme);
+      if (lemmaList) lemmaList.push(entry);
+      else this.byLemma.set(lemme, [entry]);
     }
     this.loaded = true;
-    console.log(`[lexique] loaded ${this.bySurface.size} surface forms`);
+    console.log(`[lexique] loaded ${this.bySurface.size} surface forms, ${this.byLemma.size} lemmas`);
   }
 
   lookup(surface: string): LexEntry | null {
@@ -97,6 +102,18 @@ class LexiqueIndex {
     if (!list || list.length === 0) return null;
     // 频率最高的义项胜出（manger 作为动词频率远高于 NOM "食槽"）
     return [...list].sort((a, b) => b.freq - a.freq)[0];
+  }
+
+  /** 给定 lemma + pos + gender，反查该形式（取频率最高的单形）。
+   *  例：findForm('beau', 'adj', 'f') → 'belle'。 */
+  findForm(lemma: string, pos: LexPos, gender: 'm' | 'f'): string | null {
+    const list = this.byLemma.get(lemma.trim().toLowerCase());
+    if (!list || list.length === 0) return null;
+    const matches = list.filter(e => e.pos === pos && e.gender === gender);
+    if (matches.length === 0) return null;
+    // 单数形通常频率高于复数（belle > belles），freq 排序后取首
+    matches.sort((a, b) => b.freq - a.freq);
+    return matches[0].surface;
   }
 
   isReady(): boolean {

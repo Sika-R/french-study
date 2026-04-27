@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { getDb } from '../../server/db/client.js';
 import { verbiste } from '../../server/dict/verbiste.js';
+import { lexique } from '../../server/dict/lexique.js';
 import { TENSES, tenseById, PERSONS_FULL } from '../../server/dict/tenses.js';
 
 export interface VerbCard {
@@ -96,7 +97,7 @@ export function registerPracticeHandlers(): void {
    */
   ipcMain.handle('practice:submitOne', (_e, args: {
     word_id: number;
-    mode: 'drill' | 'reverse';
+    mode: 'drill' | 'reverse' | 'adj' | 'noun';
     tense_id: string;
     person: number;       // 0 = 无人称分词
     user_input: string;
@@ -104,16 +105,21 @@ export function registerPracticeHandlers(): void {
     correct: boolean;     // 由前端比对（reverse 模式涉及多字段，前端处理）
   }) => {
     const db = getDb();
+    const modeName =
+      args.mode === 'drill' ? 'drill-single'
+      : args.mode === 'reverse' ? 'drill-reverse'
+      : args.mode === 'adj' ? 'adj-form'
+      : 'noun-gender';
     db.prepare(`
       INSERT INTO review_logs (word_id, reviewed_at, rating, mode, correct, user_input, expected, tense_id, person)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       args.word_id, Date.now(),
       args.correct ? 3 : 1,
-      args.mode === 'drill' ? 'drill-single' : 'drill-reverse',
+      modeName,
       args.correct ? 1 : 0,
       args.user_input, args.expected,
-      args.tense_id, args.person === 0 ? null : args.person
+      args.tense_id || null, args.person === 0 ? null : args.person
     );
     return { correct: args.correct };
   });
@@ -290,6 +296,69 @@ export function registerPracticeHandlers(): void {
           if (v) pool.push({ word, tense: t, person: pp, expected: v });
         }
       }
+    }
+    return pool;
+  });
+
+  /** 形容词阴阳变化池：用 lexique.findForm 找阴性形式 */
+  ipcMain.handle('practice:buildAdjPool', (_e, opts: { word_ids: number[] }) => {
+    if (!opts.word_ids || opts.word_ids.length === 0) return [];
+    const db = getDb();
+    const pool: Array<{
+      word: { id: number; lemma: string; translation_zh: string|null; translation_en: string|null };
+      masculine: string;
+      feminine: string;
+    }> = [];
+    for (const wid of opts.word_ids) {
+      const word = db.prepare(
+        `SELECT id, lemma, surface, gender, translation_zh, translation_en
+         FROM words WHERE id = ? AND pos = 'adj'`
+      ).get(wid) as
+        { id: number; lemma: string; surface: string; gender: 'm'|'f'|null;
+          translation_zh: string|null; translation_en: string|null } | undefined;
+      if (!word) continue;
+
+      // 阳性 = lemma；阴性 = lexique 中 lemma+adj+f 的频率最高 surface
+      const masculine = lexique.findForm(word.lemma, 'adj', 'm') ?? word.lemma;
+      const feminine = lexique.findForm(word.lemma, 'adj', 'f');
+      if (!feminine) continue; // 找不到阴性形式 → 跳过该词
+      pool.push({
+        word: {
+          id: word.id, lemma: word.lemma,
+          translation_zh: word.translation_zh, translation_en: word.translation_en
+        },
+        masculine, feminine
+      });
+    }
+    // 洗牌
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool;
+  });
+
+  /** 名词阴阳判定池 */
+  ipcMain.handle('practice:buildNounPool', (_e, opts: { word_ids: number[] }) => {
+    if (!opts.word_ids || opts.word_ids.length === 0) return [];
+    const db = getDb();
+    const pool: Array<{
+      word: { id: number; lemma: string; gender: 'm'|'f';
+              translation_zh: string|null; translation_en: string|null };
+    }> = [];
+    for (const wid of opts.word_ids) {
+      const w = db.prepare(
+        `SELECT id, lemma, gender, translation_zh, translation_en
+         FROM words WHERE id = ? AND pos = 'noun' AND gender IN ('m','f')`
+      ).get(wid) as
+        { id: number; lemma: string; gender: 'm'|'f';
+          translation_zh: string|null; translation_en: string|null } | undefined;
+      if (!w) continue;
+      pool.push({ word: w });
+    }
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
     }
     return pool;
   });

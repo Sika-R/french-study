@@ -41,7 +41,7 @@ const api = {
     submitTable: (args: { word_id: number; verb: string; tense_id: string; answers: Record<number, string> }) =>
       ipcRenderer.invoke('practice:submitTable', args),
     submitOne: (args: {
-      word_id: number; mode: 'drill' | 'reverse'; tense_id: string; person: number;
+      word_id: number; mode: 'drill' | 'reverse' | 'adj' | 'noun'; tense_id: string; person: number;
       user_input: string; expected: string; correct: boolean;
     }) => ipcRenderer.invoke('practice:submitOne', args),
     errorStatsByTense: (opts?: { minAttempts?: number }) =>
@@ -53,7 +53,26 @@ const api = {
     buildReversePool: (opts: { word_ids: number[]; tense_ids: string[] }) =>
       ipcRenderer.invoke('practice:buildReversePool', opts),
     buildDrillPool: (opts: { word_ids: number[]; tense_ids: string[] }) =>
-      ipcRenderer.invoke('practice:buildDrillPool', opts)
+      ipcRenderer.invoke('practice:buildDrillPool', opts),
+    buildAdjPool: (opts: { word_ids: number[] }) =>
+      ipcRenderer.invoke('practice:buildAdjPool', opts),
+    buildNounPool: (opts: { word_ids: number[] }) =>
+      ipcRenderer.invoke('practice:buildNounPool', opts)
+  },
+  notes: {
+    create: (input: { title?: string | null; content: string }) =>
+      ipcRenderer.invoke('notes:create', input),
+    update: (id: number, patch: { title?: string | null; content?: string }) =>
+      ipcRenderer.invoke('notes:update', id, patch),
+    delete: (id: number) => ipcRenderer.invoke('notes:delete', id),
+    list: (opts?: { limit?: number; offset?: number }) =>
+      ipcRenderer.invoke('notes:list', opts ?? {}),
+    get: (id: number) => ipcRenderer.invoke('notes:get', id),
+    byDate: () => ipcRenderer.invoke('notes:byDate'),
+    recommended: () => ipcRenderer.invoke('notes:recommended'),
+    byIds: (ids: number[]) => ipcRenderer.invoke('notes:byIds', ids),
+    submit: (args: { note_id: number; rating: 1 | 2 | 3 | 4 }) =>
+      ipcRenderer.invoke('notes:submit', args)
   }
 };
 

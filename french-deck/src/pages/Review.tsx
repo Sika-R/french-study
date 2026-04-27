@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import AccentInput from '../components/AccentInput';
 import Practice from './Practice';
+import AdjPractice from './AdjPractice';
+import NounPractice from './NounPractice';
+import NoteReview from './NoteReview';
 import SelectWordsDialog from '../components/SelectWordsDialog';
+import SelectNotesDialog from '../components/SelectNotesDialog';
 
 interface QueueCard {
   id: number;
@@ -17,7 +21,7 @@ function fold(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 }
 
-type Tab = 'spell' | 'verb';
+type Tab = 'spell' | 'verb' | 'adj' | 'noun' | 'notes';
 type VerbSubMode = 'table' | 'drill' | 'reverse';
 
 export default function Review() {
@@ -27,13 +31,19 @@ export default function Review() {
   // 当前会话选中的 word ids (null 表示未开始 / 还没选)
   const [spellWordIds, setSpellWordIds] = useState<number[] | null>(null);
   const [verbWordIds, setVerbWordIds] = useState<number[] | null>(null);
-  const [showDialog, setShowDialog] = useState<'spell' | 'verb' | null>(null);
+  const [adjWordIds, setAdjWordIds] = useState<number[] | null>(null);
+  const [nounWordIds, setNounWordIds] = useState<number[] | null>(null);
+  const [noteIds, setNoteIds] = useState<number[] | null>(null);
+  const [showDialog, setShowDialog] = useState<'spell' | 'verb' | 'adj' | 'noun' | 'notes' | null>(null);
 
   return (
     <div className="card">
-      <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid #e6e8ef', paddingBottom: 12, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid #e6e8ef', paddingBottom: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <button className={tab === 'spell' ? '' : 'ghost'} onClick={() => setTab('spell')}>拼写</button>
         <button className={tab === 'verb' ? '' : 'ghost'} onClick={() => setTab('verb')}>动词变位</button>
+        <button className={tab === 'adj' ? '' : 'ghost'} onClick={() => setTab('adj')}>形容词阴阳</button>
+        <button className={tab === 'noun' ? '' : 'ghost'} onClick={() => setTab('noun')}>名词阴阳</button>
+        <button className={tab === 'notes' ? '' : 'ghost'} onClick={() => setTab('notes')}>笔记</button>
       </div>
 
       {tab === 'spell' && (
@@ -65,6 +75,60 @@ export default function Review() {
         )
       )}
 
+      {tab === 'adj' && (
+        adjWordIds == null ? (
+          <StartScreen
+            title="形容词阴阳变化"
+            description="给出意思和原型，同时填写阳性和阴性形式（如 beau / belle）。"
+            onStart={() => setShowDialog('adj')}
+          />
+        ) : (
+          <div>
+            <div className="row" style={{ marginBottom: 12, justifyContent: 'flex-end' }}>
+              <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>已选 {adjWordIds.length} 个形容词</span>
+              <button className="ghost" onClick={() => setAdjWordIds(null)}>重新选词</button>
+            </div>
+            <AdjPractice wordIds={adjWordIds} onExit={() => setAdjWordIds(null)} />
+          </div>
+        )
+      )}
+
+      {tab === 'noun' && (
+        nounWordIds == null ? (
+          <StartScreen
+            title="名词阴阳判定"
+            description="给出名词原型，选择 le / la；可选输入意思在揭示后自评。"
+            onStart={() => setShowDialog('noun')}
+          />
+        ) : (
+          <div>
+            <div className="row" style={{ marginBottom: 12, justifyContent: 'flex-end' }}>
+              <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>已选 {nounWordIds.length} 个名词</span>
+              <button className="ghost" onClick={() => setNounWordIds(null)}>重新选词</button>
+            </div>
+            <NounPractice wordIds={nounWordIds} onExit={() => setNounWordIds(null)} />
+          </div>
+        )
+      )}
+
+      {tab === 'notes' && (
+        noteIds == null ? (
+          <StartScreen
+            title="笔记复习"
+            description="复习日常记录的语法点 / 易混词 / 表达。FSRS 间隔记忆。"
+            onStart={() => setShowDialog('notes')}
+          />
+        ) : (
+          <div>
+            <div className="row" style={{ marginBottom: 12, justifyContent: 'flex-end' }}>
+              <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>已选 {noteIds.length} 条笔记</span>
+              <button className="ghost" onClick={() => setNoteIds(null)}>重新选笔记</button>
+            </div>
+            <NoteReview noteIds={noteIds} onExit={() => setNoteIds(null)} />
+          </div>
+        )
+      )}
+
       {showDialog === 'spell' && (
         <SelectWordsDialog
           onConfirm={ids => { setSpellWordIds(ids); setShowDialog(null); }}
@@ -73,8 +137,28 @@ export default function Review() {
       )}
       {showDialog === 'verb' && (
         <SelectWordsDialog
-          verbOnly
+          posOnly="verb"
           onConfirm={ids => { setVerbWordIds(ids); setShowDialog(null); }}
+          onCancel={() => setShowDialog(null)}
+        />
+      )}
+      {showDialog === 'adj' && (
+        <SelectWordsDialog
+          posOnly="adj"
+          onConfirm={ids => { setAdjWordIds(ids); setShowDialog(null); }}
+          onCancel={() => setShowDialog(null)}
+        />
+      )}
+      {showDialog === 'noun' && (
+        <SelectWordsDialog
+          posOnly="noun"
+          onConfirm={ids => { setNounWordIds(ids); setShowDialog(null); }}
+          onCancel={() => setShowDialog(null)}
+        />
+      )}
+      {showDialog === 'notes' && (
+        <SelectNotesDialog
+          onConfirm={ids => { setNoteIds(ids); setShowDialog(null); }}
           onCancel={() => setShowDialog(null)}
         />
       )}

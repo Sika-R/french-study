@@ -16,13 +16,19 @@ interface DateGroup { day: string; count: number; ids: number[] }
 type Mode = 'recommended' | 'byDate' | 'multiSelect' | 'random';
 
 interface Props {
-  /** 仅 verb，限制候选池 */
-  verbOnly?: boolean;
+  /** 限制候选池到指定词性 */
+  posOnly?: 'verb' | 'adj' | 'noun';
   onConfirm: (ids: number[]) => void;
   onCancel: () => void;
 }
 
-export default function SelectWordsDialog({ verbOnly, onConfirm, onCancel }: Props) {
+const POS_LABEL: Record<string, string> = {
+  verb: '动词',
+  adj: '形容词',
+  noun: '名词'
+};
+
+export default function SelectWordsDialog({ posOnly, onConfirm, onCancel }: Props) {
   const [mode, setMode] = useState<Mode>('recommended');
   const [allWords, setAllWords] = useState<WordRow[]>([]);
   const [dateGroups, setDateGroups] = useState<DateGroup[]>([]);
@@ -35,22 +41,22 @@ export default function SelectWordsDialog({ verbOnly, onConfirm, onCancel }: Pro
   useEffect(() => {
     (async () => {
       const all = (await window.api.words.list({ limit: 500 })) as WordRow[];
-      const filtered = verbOnly ? all.filter(w => w.pos === 'verb') : all;
+      const filtered = posOnly ? all.filter(w => w.pos === posOnly) : all;
       setAllWords(filtered);
 
       const ds = (await window.api.words.byDate()) as DateGroup[];
-      setDateGroups(verbOnly
+      setDateGroups(posOnly
         ? ds.map(d => ({ ...d, ids: d.ids.filter(id => filtered.some(w => w.id === id)) }))
             .filter(d => d.ids.length > 0)
         : ds
       );
 
       const rec = (await window.api.words.recommended()) as number[];
-      setRecommendedIds(verbOnly ? rec.filter(id => filtered.some(w => w.id === id)) : rec);
+      setRecommendedIds(posOnly ? rec.filter(id => filtered.some(w => w.id === id)) : rec);
 
       setLoading(false);
     })();
-  }, [verbOnly]);
+  }, [posOnly]);
 
   // 根据当前模式计算最终选定的 word ids
   const finalIds = useMemo<number[]>(() => {
@@ -97,7 +103,7 @@ export default function SelectWordsDialog({ verbOnly, onConfirm, onCancel }: Pro
         width: '90%', maxWidth: 720, maxHeight: '85vh',
         display: 'flex', flexDirection: 'column'
       }}>
-        <h2 style={{ marginTop: 0 }}>选择今日要复习的单词{verbOnly && ' (仅动词)'}</h2>
+        <h2 style={{ marginTop: 0 }}>选择今日要复习的单词{posOnly && ` (仅${POS_LABEL[posOnly] ?? posOnly})`}</h2>
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
           <button className={mode === 'recommended' ? '' : 'ghost'} onClick={() => setMode('recommended')}>推荐 (按记忆曲线)</button>
@@ -182,7 +188,7 @@ export default function SelectWordsDialog({ verbOnly, onConfirm, onCancel }: Pro
 
           {!loading && mode === 'random' && (
             <div>
-              <p className="muted">把所有 {allWords.length} 个{verbOnly ? '动词' : '单词'}都纳入，开始练习时再随机洗牌。</p>
+              <p className="muted">把所有 {allWords.length} 个{posOnly ? POS_LABEL[posOnly] : '单词'}都纳入，开始练习时再随机洗牌。</p>
             </div>
           )}
         </div>

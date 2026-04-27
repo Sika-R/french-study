@@ -8,6 +8,7 @@ import { registerWordHandlers } from './ipc/words.js';
 import { registerLookupHandlers } from './ipc/lookup.js';
 import { registerReviewHandlers } from './ipc/review.js';
 import { registerPracticeHandlers } from './ipc/practice.js';
+import { registerNoteHandlers } from './ipc/notes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,7 @@ app.whenReady().then(async () => {
   registerLookupHandlers();
   registerReviewHandlers();
   registerPracticeHandlers();
+  registerNoteHandlers();
 
   await createWindow();
 

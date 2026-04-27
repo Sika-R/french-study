@@ -106,6 +106,28 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
       CREATE INDEX IF NOT EXISTS idx_note_srs_due ON note_srs_state(due);
       CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at);
     `);
+  },
+
+  // ────────── v3 → v4: words 加 updated_at（云同步用） ──────────
+  (db) => {
+    addColumnIfMissing(db, 'words', 'updated_at', 'INTEGER');
+    // 存量行：updated_at = created_at
+    db.exec(`UPDATE words SET updated_at = created_at WHERE updated_at IS NULL`);
+  },
+
+  // ────────── v4 → v5: notes 加 uuid（云同步稳定身份） ──────────
+  (db) => {
+    addColumnIfMissing(db, 'notes', 'uuid', 'TEXT');
+    // 存量行：补一个 uuid（用 randomblob+hex 拼，不依赖 sqlite 扩展）
+    const rows = db.prepare(`SELECT id FROM notes WHERE uuid IS NULL OR uuid = ''`).all() as { id: number }[];
+    const upd = db.prepare(`UPDATE notes SET uuid = ? WHERE id = ?`);
+    for (const r of rows) {
+      // 简易 uuid v4（migrate 期间不引入 crypto 依赖，模仿 randomUUID 字符集）
+      const hex = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0');
+      const uuid = `${hex()}${hex()}-${hex()}-4${hex().slice(1)}-${(8 + Math.floor(Math.random() * 4)).toString(16)}${hex().slice(1)}-${hex()}${hex()}${hex()}`;
+      upd.run(uuid, r.id);
+    }
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_uuid ON notes(uuid)`);
   }
 
   // 以后加新 schema 在下面 push 新函数即可，不要修改已有的。
@@ -170,6 +192,7 @@ export function migrate(): void {
       const hasNotes = !!db.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='notes'"
       ).get();
+      // v4 / v5 不在这里推断（让正常迁移流程跑过去补 updated_at / uuid）
       effectiveVersion = hasNotes ? 3 : (hasTenseId ? 2 : 1);
       db.pragma(`user_version = ${effectiveVersion}`);
       console.log(`[migrate] legacy db detected, set user_version=${effectiveVersion}`);

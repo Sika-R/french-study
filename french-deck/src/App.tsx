@@ -3,6 +3,7 @@ import AddPage from './pages/AddPage';
 import WordList from './pages/WordList';
 import Review from './pages/Review';
 import Stats from './pages/Stats';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <NavLink to="/review">复习</NavLink>
           <NavLink to="/list">单词列表</NavLink>
           <NavLink to="/stats">统计</NavLink>
+          <NavLink to="/settings">设置</NavLink>
         </nav>
         <main className="main">
           <Routes>
@@ -21,6 +23,7 @@ export default function App() {
             <Route path="/review" element={<Review />} />
             <Route path="/list" element={<WordList />} />
             <Route path="/stats" element={<Stats />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>

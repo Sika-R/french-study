@@ -9,6 +9,9 @@ import { registerLookupHandlers } from './ipc/lookup.js';
 import { registerReviewHandlers } from './ipc/review.js';
 import { registerPracticeHandlers } from './ipc/practice.js';
 import { registerNoteHandlers } from './ipc/notes.js';
+import { registerSyncHandlers } from './ipc/sync.js';
+import { loadConfig } from './sync/config.js';
+import { runSync } from './sync/sync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,8 +54,14 @@ app.whenReady().then(async () => {
   registerReviewHandlers();
   registerPracticeHandlers();
   registerNoteHandlers();
+  registerSyncHandlers();
 
   await createWindow();
+
+  // 启动后异步触发一次同步（不阻塞 UI）；spell session 由 renderer 自己 mount 时再 push 一次
+  if (loadConfig().enabled) {
+    runSync().catch(err => console.warn('[startup sync] failed:', err));
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

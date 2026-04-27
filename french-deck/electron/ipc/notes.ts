@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { getDb } from '../../server/db/client.js';
 import { newCardRow, applyReview, type SrsRow } from '../../server/srs/fsrs.js';
+import { scheduleSync } from '../sync/trigger.js';
 
 export interface NoteRow {
   id: number;
@@ -36,21 +38,23 @@ export function registerNoteHandlers(): void {
   ipcMain.handle('notes:create', (_e, input: NoteInput): NoteRow => {
     const db = getDb();
     const now = Date.now();
+    const uuid = randomUUID();
     const insertNote = db.prepare(`
-      INSERT INTO notes (title, content, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO notes (title, content, created_at, updated_at, uuid)
+      VALUES (?, ?, ?, ?, ?)
     `);
     const insertSrs = db.prepare(`
       INSERT INTO note_srs_state (note_id, due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, state, last_review)
       VALUES (@word_id, @due, @stability, @difficulty, @elapsed_days, @scheduled_days, @reps, @lapses, @state, @last_review)
     `);
     const tx = db.transaction(() => {
-      const info = insertNote.run(input.title ?? null, input.content, now, now);
+      const info = insertNote.run(input.title ?? null, input.content, now, now, uuid);
       const id = Number(info.lastInsertRowid);
       insertSrs.run(newCardRow(id));
       return id;
     });
     const id = tx();
+    scheduleSync();
     return { id, title: input.title ?? null, content: input.content, created_at: now, updated_at: now };
   });
 
@@ -64,6 +68,7 @@ export function registerNoteHandlers(): void {
     if (sets.length === 0) return false;
     sets.push('updated_at = @updated_at');
     db.prepare(`UPDATE notes SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    scheduleSync();
     return true;
   });
 
@@ -76,6 +81,7 @@ export function registerNoteHandlers(): void {
       db.prepare('DELETE FROM notes WHERE id = ?').run(id);
     });
     tx();
+    scheduleSync();
     return true;
   });
 
@@ -142,6 +148,7 @@ export function registerNoteHandlers(): void {
     `).run(next);
     db.prepare('INSERT INTO note_review_logs (note_id, reviewed_at, rating) VALUES (?, ?, ?)')
       .run(args.note_id, Date.now(), args.rating);
+    scheduleSync();
     return { ok: true };
   });
 }

@@ -4,7 +4,7 @@ import Practice from './Practice';
 import AdjPractice from './AdjPractice';
 import NounPractice from './NounPractice';
 import NoteReview from './NoteReview';
-import IntegratedSpellReview, { IntegratedConfigScreen, type IntegratedConfig, clearSavedSpellSession, loadSavedSpellSession } from './IntegratedSpellReview';
+import IntegratedSpellReview, { IntegratedConfigScreen, type IntegratedConfig, clearSavedSpellSession, loadSavedSpellSession, SPELL_SESSION_KEY } from './IntegratedSpellReview';
 import SelectWordsDialog from '../components/SelectWordsDialog';
 import SelectNotesDialog from '../components/SelectNotesDialog';
 
@@ -40,11 +40,36 @@ export default function Review() {
 
   // 启动时如果存有未完成的拼写会话，自动恢复 wordIds + config（IntegratedSpellReview 内部会接续 queue 进度）
   useEffect(() => {
-    const saved = loadSavedSpellSession();
-    if (saved) {
-      setSpellConfig(saved.config);
-      setSpellWordIds(saved.wordIds);
-    }
+    let cancelled = false;
+    (async () => {
+      // 先尝试同步（可能从云上拉到更新的 spell session）
+      try {
+        const status = await (window as any).api?.sync?.status?.();
+        if (status?.enabled && status?.hasToken) {
+          const raw = localStorage.getItem(SPELL_SESSION_KEY);
+          let savedAt = 0;
+          if (raw) {
+            try { savedAt = (JSON.parse(raw) as { savedAt?: number }).savedAt || 0; } catch {}
+          }
+          const res = await (window as any).api.sync.run({
+            spellSessionPayload: raw,
+            spellSessionSavedAt: savedAt
+          });
+          if (res?.spellSessionPayload) {
+            localStorage.setItem(SPELL_SESSION_KEY, res.spellSessionPayload);
+          }
+        }
+      } catch (err) {
+        console.warn('[Review] startup sync skipped:', err);
+      }
+      if (cancelled) return;
+      const saved = loadSavedSpellSession();
+      if (saved) {
+        setSpellConfig(saved.config);
+        setSpellWordIds(saved.wordIds);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   return (

@@ -3,6 +3,7 @@ import { getDb } from '../../server/db/client.js';
 import { verbiste } from '../../server/dict/verbiste.js';
 import { lexique } from '../../server/dict/lexique.js';
 import { TENSES, tenseById, PERSONS_FULL } from '../../server/dict/tenses.js';
+import { scheduleSync } from '../sync/trigger.js';
 
 export interface VerbCard {
   id: number;
@@ -87,6 +88,7 @@ export function registerPracticeHandlers(): void {
       }
     });
     tx();
+    scheduleSync();
     return results;
   });
 
@@ -121,6 +123,7 @@ export function registerPracticeHandlers(): void {
       args.user_input, args.expected,
       args.tense_id || null, args.person === 0 ? null : args.person
     );
+    scheduleSync();
     return { correct: args.correct };
   });
 

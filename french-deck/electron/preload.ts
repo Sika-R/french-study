@@ -73,6 +73,14 @@ const api = {
     byIds: (ids: number[]) => ipcRenderer.invoke('notes:byIds', ids),
     submit: (args: { note_id: number; rating: 1 | 2 | 3 | 4 }) =>
       ipcRenderer.invoke('notes:submit', args)
+  },
+  sync: {
+    status: () => ipcRenderer.invoke('sync:status'),
+    setConfig: (patch: { enabled?: boolean; token?: string; gistId?: string | null }) =>
+      ipcRenderer.invoke('sync:setConfig', patch),
+    validateToken: (token: string) => ipcRenderer.invoke('sync:validateToken', token),
+    run: (opts?: { spellSessionPayload?: string | null; spellSessionSavedAt?: number }) =>
+      ipcRenderer.invoke('sync:run', opts ?? {})
   }
 };
 

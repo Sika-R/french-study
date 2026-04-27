@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { getDb } from '../../server/db/client.js';
 import { newCardRow } from '../../server/srs/fsrs.js';
+import { scheduleSync } from '../sync/trigger.js';
 
 export interface WordInput {
   lemma: string;
@@ -37,8 +38,8 @@ export function registerWordHandlers(): void {
     }
 
     const insertWord = db.prepare(`
-      INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en, example_fr, notes, created_at)
-      VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en, @example_fr, @notes, @created_at)
+      INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en, example_fr, notes, created_at, updated_at)
+      VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en, @example_fr, @notes, @created_at, @updated_at)
     `);
     const insertSrs = db.prepare(`
       INSERT INTO srs_state (word_id, due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, state, last_review)
@@ -55,7 +56,8 @@ export function registerWordHandlers(): void {
         translation_en: data.translation_en ?? null,
         example_fr: data.example_fr ?? null,
         notes: data.notes ?? null,
-        created_at: now
+        created_at: now,
+        updated_at: now
       });
       const wordId = Number(info.lastInsertRowid);
       insertSrs.run(newCardRow(wordId));
@@ -63,6 +65,7 @@ export function registerWordHandlers(): void {
     });
 
     const id = tx(input);
+    scheduleSync();
     return { id, created_at: now, ...input };
   });
 
@@ -71,7 +74,7 @@ export function registerWordHandlers(): void {
     const db = getDb();
     const fields = ['lemma', 'surface', 'pos', 'gender', 'translation_zh', 'translation_en', 'example_fr', 'notes'] as const;
     const sets: string[] = [];
-    const params: any = { id };
+    const params: any = { id, updated_at: Date.now() };
     for (const f of fields) {
       if (patch[f] !== undefined) {
         sets.push(`${f} = @${f}`);
@@ -79,7 +82,9 @@ export function registerWordHandlers(): void {
       }
     }
     if (sets.length === 0) return false;
+    sets.push(`updated_at = @updated_at`);
     db.prepare(`UPDATE words SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    scheduleSync();
     return true;
   });
 
@@ -106,6 +111,7 @@ export function registerWordHandlers(): void {
       db.prepare('DELETE FROM words WHERE id = ?').run(wordId);
     });
     tx(id);
+    scheduleSync();
     return true;
   });
 

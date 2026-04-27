@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import { getDb } from '../../server/db/client.js';
 import { applyReview, type SrsRating, type SrsRow } from '../../server/srs/fsrs.js';
 import { verbiste } from '../../server/dict/verbiste.js';
+import { scheduleSync } from '../sync/trigger.js';
 
 export interface QueueCard {
   id: number;
@@ -99,6 +100,7 @@ export function registerReviewHandlers(): void {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(args.word_id, Date.now(), rating, args.mode, correct, args.user_input, args.expected);
 
+    scheduleSync();
     return { correct, due: updated.due, rating };
   });
 

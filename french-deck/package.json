@@ -1,5 +1,6 @@
 {
   "name": "french-deck",
+  "productName": "french-deck",
   "version": "0.1.0",
   "description": "Local French vocabulary trainer with FSRS spaced repetition",
   "main": "out/main/main.js",
@@ -10,6 +11,10 @@
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "rebuild": "electron-rebuild -f -w better-sqlite3"
+  },
+  "build": {
+    "appId": "com.sika.frenchdeck",
+    "productName": "french-deck"
   },
   "dependencies": {
     "axios": "^1.7.7",

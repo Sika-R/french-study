@@ -9,7 +9,7 @@
 
 import { getDb } from '../../server/db/client.js';
 import { loadConfig, saveConfig } from './config.js';
-import { fetchGist, patchGist, createGist, type GistFiles } from './gist.js';
+import { fetchGist, patchGist, createGist, listMyGists, type GistFiles } from './gist.js';
 
 const SCHEMA_VERSION = 5;
 const GIST_DESCRIPTION = 'french-deck-sync';
@@ -337,19 +337,45 @@ export async function runSync(opts: RunSyncOptions = {}): Promise<RunSyncResult>
     const localSpellSavedAt = opts.spellSessionSavedAt ?? 0;
     let resultSpellPayload: string | null = opts.spellSessionPayload ?? null;
 
-    // 1) fetch remote (or create gist if first time)
+    // 1) fetch remote (or create gist if first time; 但先查云上有没有同名的复用)
     let remoteFiles: GistFiles = {};
     if (!cfg.gistId) {
-      const filesToCreate: GistFiles = snapshotToFiles(local);
-      if (opts.spellSessionPayload) {
-        filesToCreate['spell_session.json'] = {
-          content: JSON.stringify({ savedAt: localSpellSavedAt, payload: opts.spellSessionPayload }, null, 2)
-        };
+      // 先列一下当前 token 下所有 gist，看有没有别的机器已经建过 french-deck-sync
+      try {
+        const all = await listMyGists(cfg.token);
+        const existing = all.find(g => g.description === GIST_DESCRIPTION);
+        if (existing) {
+          console.log(`[sync] adopting existing gist ${existing.id}`);
+          saveConfig({ gistId: existing.id });
+          // 走正常 fetch + merge 路径，不是 create
+          remoteFiles = await fetchGist(cfg.token, existing.id);
+        } else {
+          // 真的没有 → 创建新的
+          const filesToCreate: GistFiles = snapshotToFiles(local);
+          if (opts.spellSessionPayload) {
+            filesToCreate['spell_session.json'] = {
+              content: JSON.stringify({ savedAt: localSpellSavedAt, payload: opts.spellSessionPayload }, null, 2)
+            };
+          }
+          const id = await createGist(cfg.token, filesToCreate, GIST_DESCRIPTION);
+          saveConfig({ gistId: id, lastSyncAt: Date.now(), lastError: null });
+          console.log(`[sync] created gist ${id}`);
+          return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0 } };
+        }
+      } catch (err) {
+        // listMyGists 失败 → 退回到旧逻辑（直接 create）；通常是 token 没 read scope
+        console.warn('[sync] listMyGists failed, falling back to create:', err);
+        const filesToCreate: GistFiles = snapshotToFiles(local);
+        if (opts.spellSessionPayload) {
+          filesToCreate['spell_session.json'] = {
+            content: JSON.stringify({ savedAt: localSpellSavedAt, payload: opts.spellSessionPayload }, null, 2)
+          };
+        }
+        const id = await createGist(cfg.token, filesToCreate, GIST_DESCRIPTION);
+        saveConfig({ gistId: id, lastSyncAt: Date.now(), lastError: null });
+        console.log(`[sync] created gist ${id}`);
+        return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0 } };
       }
-      const id = await createGist(cfg.token, filesToCreate, GIST_DESCRIPTION);
-      saveConfig({ gistId: id, lastSyncAt: Date.now(), lastError: null });
-      console.log(`[sync] created gist ${id}`);
-      return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0 } };
     } else {
       remoteFiles = await fetchGist(cfg.token, cfg.gistId);
     }

@@ -79,6 +79,7 @@ const api = {
     setConfig: (patch: { enabled?: boolean; token?: string; gistId?: string | null }) =>
       ipcRenderer.invoke('sync:setConfig', patch),
     validateToken: (token: string) => ipcRenderer.invoke('sync:validateToken', token),
+    listSyncGists: () => ipcRenderer.invoke('sync:listSyncGists'),
     run: (opts?: { spellSessionPayload?: string | null; spellSessionSavedAt?: number }) =>
       ipcRenderer.invoke('sync:run', opts ?? {})
   }

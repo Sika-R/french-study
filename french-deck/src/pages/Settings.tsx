@@ -16,6 +16,7 @@ export default function Settings() {
   const [busy, setBusy] = useState(false);
   const [validateMsg, setValidateMsg] = useState<string | null>(null);
   const [runMsg, setRunMsg] = useState<string | null>(null);
+  const [gistList, setGistList] = useState<Array<{ id: string; description: string | null }> | null>(null);
 
   const refresh = async () => {
     const s = await (window as any).api.sync.status() as Status;
@@ -92,6 +93,49 @@ export default function Settings() {
     } finally { setBusy(false); }
   };
 
+  const onListGists = async () => {
+    setBusy(true);
+    setRunMsg(null);
+    try {
+      const res = await (window as any).api.sync.listSyncGists();
+      if (res.ok) {
+        setGistList(res.gists);
+      } else {
+        setRunMsg('✗ ' + (res.error || '获取失败'));
+        setGistList(null);
+      }
+    } catch (err: any) {
+      setRunMsg('✗ ' + (err?.message ?? String(err)));
+    } finally { setBusy(false); }
+  };
+
+  const onAdoptGist = async (gistId: string) => {
+    setBusy(true);
+    setRunMsg('切换并同步中...');
+    try {
+      await (window as any).api.sync.setConfig({ gistId });
+      // 立刻同步一次拉取该 gist 内容
+      const raw = localStorage.getItem(SPELL_SESSION_KEY);
+      let savedAt = 0;
+      if (raw) {
+        try { savedAt = (JSON.parse(raw) as { savedAt?: number }).savedAt || 0; } catch {}
+      }
+      const res = await (window as any).api.sync.run({ spellSessionPayload: raw, spellSessionSavedAt: savedAt });
+      if (res?.spellSessionPayload) localStorage.setItem(SPELL_SESSION_KEY, res.spellSessionPayload);
+      if (res.ok) {
+        setRunMsg(`✓ 已切换到 ${gistId.slice(0, 8)}…，并已同步`);
+      } else {
+        setRunMsg('✗ ' + (res.error || '同步失败'));
+      }
+      await refresh();
+      // 重新刷新一下 gist 列表
+      const list = await (window as any).api.sync.listSyncGists();
+      if (list.ok) setGistList(list.gists);
+    } catch (err: any) {
+      setRunMsg('✗ ' + (err?.message ?? String(err)));
+    } finally { setBusy(false); }
+  };
+
   if (!status) return <div className="card"><p>加载中…</p></div>;
 
   return (
@@ -145,8 +189,34 @@ export default function Settings() {
         </div>
         <div className="row" style={{ marginTop: 12 }}>
           <button onClick={onRunNow} disabled={busy || !status.enabled}>立即同步</button>
+          <button className="ghost" onClick={onListGists} disabled={busy || !status.hasToken}>查看云端 gist</button>
         </div>
         {runMsg && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>{runMsg}</div>}
+
+        {gistList && (
+          <div style={{ marginTop: 12, padding: 12, border: '1px solid #e6e8ef', borderRadius: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+              当前 token 下找到 {gistList.length} 个 french-deck-sync gist
+              {gistList.length > 1 && <span style={{ color: '#b1261e' }}> — 多个机器各自创建了，请选一个统一用</span>}
+            </div>
+            {gistList.length === 0 && <div className="muted" style={{ fontSize: 13 }}>没找到。可能是别的机器还没成功推送过；或者那台机器用的是另一个 token。</div>}
+            {gistList.map(g => (
+              <div key={g.id} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 0', borderTop: '1px solid #eef0f4'
+              }}>
+                <code style={{ fontSize: 12 }}>{g.id}</code>
+                {g.id === status.gistId && <span className="tag">当前</span>}
+                {g.id !== status.gistId && (
+                  <button className="ghost" style={{ padding: '4px 10px', fontSize: 12, marginLeft: 'auto' }}
+                    onClick={() => onAdoptGist(g.id)} disabled={busy}>
+                    切换到这个
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

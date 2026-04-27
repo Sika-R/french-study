@@ -60,3 +60,20 @@ export async function validateToken(token: string): Promise<boolean> {
   const r = await fetch(`${API}/user`, { headers: headers(token) });
   return r.ok;
 }
+
+/**
+ * 列出当前 token 下所有 gist 的 (id, description)。
+ * 用于发现别的机器创建过的同步 gist，避免重复创建。
+ * 翻页：GitHub 默认 30 / 页，最多 100 / 页；这里取 100 / 页 + 翻 5 页 = 500 条够用。
+ */
+export async function listMyGists(token: string): Promise<Array<{ id: string; description: string | null }>> {
+  const out: Array<{ id: string; description: string | null }> = [];
+  for (let page = 1; page <= 5; page++) {
+    const r = await fetch(`${API}/gists?per_page=100&page=${page}`, { headers: headers(token) });
+    if (!r.ok) throw new Error(`listMyGists ${r.status}: ${await r.text()}`);
+    const body = await r.json() as Array<{ id: string; description: string | null }>;
+    for (const g of body) out.push({ id: g.id, description: g.description });
+    if (body.length < 100) break;
+  }
+  return out;
+}

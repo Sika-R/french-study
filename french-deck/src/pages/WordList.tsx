@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import EditWordDialog from '../components/EditWordDialog';
 
 interface WordRow {
   id: number;
@@ -8,6 +9,7 @@ interface WordRow {
   gender: 'm' | 'f' | null;
   translation_zh: string | null;
   translation_en: string | null;
+  example_fr: string | null;
   created_at: number;
 }
 
@@ -15,6 +17,7 @@ export default function WordList() {
   const [rows, setRows] = useState<WordRow[]>([]);
   const [search, setSearch] = useState('');
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [editing, setEditing] = useState<WordRow | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -79,12 +82,23 @@ export default function WordList() {
                 <button className="ghost" onClick={() => setConfirmId(null)} style={{ padding: '4px 8px', fontSize: 12 }}>取消</button>
               </span>
             ) : (
-              <button className="ghost" onClick={() => setConfirmId(w.id)} disabled={busy}>删除</button>
+              <span style={{ display: 'flex', gap: 4 }}>
+                <button className="ghost" onClick={() => setEditing(w)} disabled={busy} style={{ padding: '4px 8px', fontSize: 12 }}>编辑</button>
+                <button className="ghost" onClick={() => setConfirmId(w.id)} disabled={busy} style={{ padding: '4px 8px', fontSize: 12 }}>删除</button>
+              </span>
             )}
           </div>
         </div>
       ))}
       {rows.length === 0 && <p className="muted">还没有单词。去「录入新词」添加第一条吧。</p>}
+
+      {editing && (
+        <EditWordDialog
+          word={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => load()}
+        />
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import AccentInput from '../components/AccentInput';
 import Practice from './Practice';
+import SelectWordsDialog from '../components/SelectWordsDialog';
 
 interface QueueCard {
   id: number;
@@ -16,29 +17,102 @@ function fold(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 }
 
-type Tab = 'spell' | 'table' | 'drill' | 'reverse';
+type Tab = 'spell' | 'verb';
+type VerbSubMode = 'table' | 'drill' | 'reverse';
 
 export default function Review() {
   const [tab, setTab] = useState<Tab>('spell');
+  const [verbSub, setVerbSub] = useState<VerbSubMode>('table');
+
+  // 当前会话选中的 word ids (null 表示未开始 / 还没选)
+  const [spellWordIds, setSpellWordIds] = useState<number[] | null>(null);
+  const [verbWordIds, setVerbWordIds] = useState<number[] | null>(null);
+  const [showDialog, setShowDialog] = useState<'spell' | 'verb' | null>(null);
 
   return (
     <div className="card">
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid #e6e8ef', paddingBottom: 12, marginBottom: 16 }}>
-        <button className={tab === 'spell' ? '' : 'ghost'} onClick={() => setTab('spell')}>拼写复习</button>
-        <button className={tab === 'table' ? '' : 'ghost'} onClick={() => setTab('table')}>变位填表</button>
-        <button className={tab === 'drill' ? '' : 'ghost'} onClick={() => setTab('drill')}>变位单题</button>
-        <button className={tab === 'reverse' ? '' : 'ghost'} onClick={() => setTab('reverse')}>反向识别</button>
+        <button className={tab === 'spell' ? '' : 'ghost'} onClick={() => setTab('spell')}>拼写</button>
+        <button className={tab === 'verb' ? '' : 'ghost'} onClick={() => setTab('verb')}>动词变位</button>
       </div>
 
-      {tab === 'spell' && <SpellReview />}
-      {tab === 'table' && <Practice key="table" subMode="table" />}
-      {tab === 'drill' && <Practice key="drill" subMode="drill" />}
-      {tab === 'reverse' && <Practice key="reverse" subMode="reverse" />}
+      {tab === 'spell' && (
+        spellWordIds == null ? (
+          <StartScreen
+            title="拼写复习"
+            description="给出翻译/词性，让你输入法语单词；名词需选择阴阳性。"
+            onStart={() => setShowDialog('spell')}
+          />
+        ) : (
+          <SpellReview wordIds={spellWordIds} onExit={() => setSpellWordIds(null)} />
+        )
+      )}
+
+      {tab === 'verb' && (
+        verbWordIds == null ? (
+          <StartScreen
+            title="动词变位练习"
+            description="先选要练习的动词和时态。三种子模式：填表 / 单题 / 反向识别（认人称）。"
+            onStart={() => setShowDialog('verb')}
+          />
+        ) : (
+          <VerbWorkspace
+            wordIds={verbWordIds}
+            subMode={verbSub}
+            setSubMode={setVerbSub}
+            onExit={() => setVerbWordIds(null)}
+          />
+        )
+      )}
+
+      {showDialog === 'spell' && (
+        <SelectWordsDialog
+          onConfirm={ids => { setSpellWordIds(ids); setShowDialog(null); }}
+          onCancel={() => setShowDialog(null)}
+        />
+      )}
+      {showDialog === 'verb' && (
+        <SelectWordsDialog
+          verbOnly
+          onConfirm={ids => { setVerbWordIds(ids); setShowDialog(null); }}
+          onCancel={() => setShowDialog(null)}
+        />
+      )}
     </div>
   );
 }
 
-function SpellReview() {
+function StartScreen({ title, description, onStart }: { title: string; description: string; onStart: () => void }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+      <h2 style={{ marginTop: 0 }}>{title}</h2>
+      <p className="muted" style={{ maxWidth: 480, margin: '0 auto 24px' }}>{description}</p>
+      <button onClick={onStart} style={{ padding: '10px 24px', fontSize: 15 }}>选择单词，开始</button>
+    </div>
+  );
+}
+
+function VerbWorkspace({
+  wordIds, subMode, setSubMode, onExit
+}: {
+  wordIds: number[]; subMode: VerbSubMode; setSubMode: (m: VerbSubMode) => void; onExit: () => void;
+}) {
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className={subMode === 'table' ? '' : 'ghost'} onClick={() => setSubMode('table')}>填表</button>
+        <button className={subMode === 'drill' ? '' : 'ghost'} onClick={() => setSubMode('drill')}>单题</button>
+        <button className={subMode === 'reverse' ? '' : 'ghost'} onClick={() => setSubMode('reverse')}>反向识别</button>
+        <span style={{ flex: 1 }} />
+        <span className="muted" style={{ fontSize: 13 }}>已选 {wordIds.length} 个动词</span>
+        <button className="ghost" onClick={onExit}>重新选词</button>
+      </div>
+      <Practice key={subMode} subMode={subMode} wordIds={wordIds} />
+    </div>
+  );
+}
+
+function SpellReview({ wordIds, onExit }: { wordIds: number[]; onExit: () => void }) {
   const [queue, setQueue] = useState<QueueCard[]>([]);
   const [idx, setIdx] = useState(0);
   const [genderPick, setGenderPick] = useState<'m' | 'f' | ''>('');
@@ -51,10 +125,16 @@ function SpellReview() {
 
   const loadQueue = async () => {
     setLoading(true);
-    const q = (await window.api.review.queue(30)) as QueueCard[];
-    setQueue(q);
+    // 从指定 ids 拉单词，用 Fisher-Yates 洗牌
+    const rows = (await window.api.words.byIds(wordIds)) as QueueCard[];
+    const shuffled = rows.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    setQueue(shuffled);
     setIdx(0);
-    setDone(q.length === 0);
+    setDone(shuffled.length === 0);
     resetForCard();
     setLoading(false);
   };
@@ -65,16 +145,18 @@ function SpellReview() {
     setGenderPick('');
   };
 
-  useEffect(() => { loadQueue(); }, []);
+  useEffect(() => { loadQueue(); }, [wordIds]);
   useEffect(() => { resetForCard(); }, [idx, card?.id]);
 
   if (loading) return <p>加载中…</p>;
   if (done || !card) {
     return (
       <div>
-        <h2>没有到期的复习卡片 🎉</h2>
-        <p className="muted">FSRS 会根据你的回答安排下次复习时间，稍后再来吧。</p>
-        <button onClick={loadQueue}>刷新</button>
+        <h2>🎉 完成 {queue.length} 张卡片！</h2>
+        <div className="row">
+          <button onClick={loadQueue}>再来一轮</button>
+          <button className="ghost" onClick={onExit}>重新选词</button>
+        </div>
       </div>
     );
   }
@@ -105,7 +187,13 @@ function SpellReview() {
       expected,
       rating: revealed.correct ? 3 : 1
     });
-    if (idx + 1 >= queue.length) setDone(true); else setIdx(idx + 1);
+    // 新队列长度（错题压回末尾）
+    const newQueueLen = queue.length + (revealed.correct ? 0 : 1);
+    if (!revealed.correct) {
+      setQueue(q => [...q, card]);
+    }
+    if (idx + 1 >= newQueueLen) setDone(true);
+    else setIdx(idx + 1);
   };
 
   return (

@@ -79,33 +79,29 @@ type SubMode = 'table' | 'drill' | 'reverse';
 
 interface Props {
   subMode: SubMode;
+  wordIds: number[];   // 已由外层 SelectWordsDialog 选定的动词 ids
 }
 
-export default function Practice({ subMode }: Props) {
+export default function Practice({ subMode, wordIds }: Props) {
   const [tenses, setTenses] = useState<TenseDef[]>([]);
   const [verbs, setVerbs] = useState<VerbCard[]>([]);
   const [selectedTenses, setSelectedTenses] = useState<Set<string>>(new Set());
-  const [selectedVerbs, setSelectedVerbs] = useState<Set<number>>(new Set());
   const [started, setStarted] = useState(false);
 
   useEffect(() => {
     window.api.practice.tenses().then((t: TenseDef[]) => setTenses(t));
-    window.api.practice.verbs().then((v: VerbCard[]) => {
-      setVerbs(v);
-      // 默认全选已录入动词
-      setSelectedVerbs(new Set(v.map(x => x.id)));
-    });
-  }, []);
+    // 只取 wordIds 范围内、且在 Verbiste 中可变位的动词
+    (async () => {
+      const all = (await window.api.practice.verbs()) as VerbCard[];
+      const filtered = all.filter(v => wordIds.includes(v.id));
+      setVerbs(filtered);
+    })();
+  }, [wordIds]);
 
   const toggleTense = (id: string) => {
     const next = new Set(selectedTenses);
     next.has(id) ? next.delete(id) : next.add(id);
     setSelectedTenses(next);
-  };
-  const toggleVerb = (id: number) => {
-    const next = new Set(selectedVerbs);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSelectedVerbs(next);
   };
 
   if (!started) {
@@ -142,55 +138,37 @@ export default function Practice({ subMode }: Props) {
           </div>
         </div>
 
-        {subMode !== 'table' && (
-          <div style={{ marginTop: 16 }}>
-            <h4>选择动词 ({selectedVerbs.size} / {verbs.length})</h4>
-            {verbs.length === 0 && <p className="muted">还没有已录入的动词。先去「录入新词」加几个动词。</p>}
+        <div style={{ marginTop: 16 }}>
+          <h4>动词 ({verbs.length} 个)</h4>
+          {verbs.length === 0 && <p className="muted">所选单词中没有可变位的动词。换个范围吧。</p>}
+          {verbs.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {verbs.map(v => (
-                <label key={v.id} style={{
-                  padding: '4px 10px', borderRadius: 14,
-                  background: selectedVerbs.has(v.id) ? '#4361ee' : '#eef1fc',
-                  color: selectedVerbs.has(v.id) ? 'white' : '#1f2330',
-                  cursor: 'pointer', fontSize: 13
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedVerbs.has(v.id)}
-                    onChange={() => toggleVerb(v.id)}
-                    style={{ display: 'none' }}
-                  />
-                  {v.lemma}
-                </label>
+                <span key={v.id} className="tag">{v.lemma}</span>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="row" style={{ marginTop: 20 }}>
           <button
             onClick={() => setStarted(true)}
-            disabled={
-              selectedTenses.size === 0
-              || (subMode === 'table' && verbs.length === 0)
-              || (subMode !== 'table' && selectedVerbs.size === 0)
-            }
+            disabled={selectedTenses.size === 0 || verbs.length === 0}
           >开始练习</button>
         </div>
       </div>
     );
   }
 
-  const verbList = verbs.filter(v => selectedVerbs.has(v.id));
   const tenseList = tenses.filter(t => selectedTenses.has(t.id));
 
   if (subMode === 'table') {
-    return <TablePractice verbs={verbList.length > 0 ? verbList : verbs} tenses={tenseList} onExit={() => setStarted(false)} />;
+    return <TablePractice verbs={verbs} tenses={tenseList} onExit={() => setStarted(false)} />;
   }
   if (subMode === 'drill') {
-    return <DrillPractice verbs={verbList} tenses={tenseList} onExit={() => setStarted(false)} />;
+    return <DrillPractice verbs={verbs} tenses={tenseList} onExit={() => setStarted(false)} />;
   }
-  return <ReversePractice verbs={verbList} tenses={tenseList} onExit={() => setStarted(false)} />;
+  return <ReversePractice verbs={verbs} tenses={tenseList} onExit={() => setStarted(false)} />;
 }
 
 /* ───────────────── 模式 1: 整表填空 ───────────────── */
@@ -200,6 +178,8 @@ function TablePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
   const [table, setTable] = useState<{ person: number; expected: string | null }[] | null>(null);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [submitted, setSubmitted] = useState<{ person: number; correct: boolean; expected: string | null; user_input: string }[] | null>(null);
+  // 已答对、需要锁定的人称 → 其正确答案
+  const [lockedCorrect, setLockedCorrect] = useState<Record<number, string>>({});
 
   const verb = verbs[verbIdx];
   const tense = tenses[tenseIdx];
@@ -209,6 +189,7 @@ function TablePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
     setTable(null);
     setAnswers({});
     setSubmitted(null);
+    setLockedCorrect({});
     window.api.practice.conjugationTable(verb.lemma, tense.id).then(setTable);
   }, [verb?.id, tense?.id]);
 
@@ -216,13 +197,29 @@ function TablePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
 
   const submit = async () => {
     if (!table) return;
-    const r = await window.api.practice.submitTable({
+    // 合并：已锁定的正确答案 + 本轮新填的答案
+    const fullAnswers: Record<number, string> = { ...lockedCorrect, ...answers };
+    const r = (await window.api.practice.submitTable({
       word_id: verb.id,
       verb: verb.lemma,
       tense_id: tense.id,
-      answers
-    });
-    setSubmitted(r as any);
+      answers: fullAnswers
+    })) as { person: number; correct: boolean; expected: string | null; user_input: string }[];
+    setSubmitted(r);
+    // 把这一轮新答对的也加入锁定
+    const nextLocked = { ...lockedCorrect };
+    r.forEach(row => { if (row.correct) nextLocked[row.person] = row.user_input; });
+    setLockedCorrect(nextLocked);
+  };
+
+  const allCorrect = submitted ? submitted.every(r => r.correct) : false;
+
+  const retryWrong = () => {
+    if (!submitted) return;
+    // 清空错的人称的输入，让用户重填
+    const cleaned: Record<number, string> = {};
+    setAnswers(cleaned);
+    setSubmitted(null);
   };
 
   const next = () => {
@@ -246,22 +243,32 @@ function TablePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
       {!table && <p className="muted">加载中…</p>}
       {table && table.map(slot => {
         const correctRow = submitted?.find(r => r.person === slot.person);
+        const lockedAns = lockedCorrect[slot.person];
+        const isLocked = !!lockedAns;
+        const displayValue = isLocked
+          ? lockedAns
+          : (correctRow ? (answers[slot.person] ?? '') : (answers[slot.person] ?? ''));
+        const isWrongRow = correctRow && !correctRow.correct;
         return (
           <div key={slot.person} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             <div style={{ width: 130, color: '#666' }}>{PERSON_LABELS[slot.person]}</div>
             <div style={{ flex: 1 }}>
               <input
-                value={answers[slot.person] ?? ''}
-                disabled={!!submitted}
+                value={displayValue}
+                disabled={isLocked || (!!submitted && !!correctRow)}
                 onChange={e => setAnswers({ ...answers, [slot.person]: e.target.value })}
                 style={{
-                  background: correctRow ? (correctRow.correct ? '#e8f7ee' : '#fdecea') : 'white',
-                  color: correctRow ? (correctRow.correct ? '#1e7c3a' : '#b1261e') : '#1f2330'
+                  background: isLocked
+                    ? '#e8f7ee'
+                    : isWrongRow ? '#fdecea' : 'white',
+                  color: isLocked
+                    ? '#1e7c3a'
+                    : isWrongRow ? '#b1261e' : '#1f2330'
                 }}
               />
-              {correctRow && !correctRow.correct && (
+              {isWrongRow && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  ✓ 答案：{correctRow.expected ?? '(无)'}
+                  ✓ 答案：{correctRow!.expected ?? '(无)'}（再填一次）
                 </div>
               )}
             </div>
@@ -272,8 +279,13 @@ function TablePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
       <div className="row" style={{ marginTop: 16 }}>
         {!submitted ? (
           <button onClick={submit}>提交</button>
-        ) : (
+        ) : allCorrect ? (
           <button onClick={next} autoFocus>下一组</button>
+        ) : (
+          <>
+            <button onClick={retryWrong} autoFocus>重填错题</button>
+            <button className="ghost" onClick={next}>跳过本组</button>
+          </>
         )}
       </div>
     </div>
@@ -341,6 +353,10 @@ function DrillPractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses: T
         expected: item.expected,
         correct: revealed.correct
       });
+      // 错题压回队列末尾，直到全部做对
+      if (!revealed.correct) {
+        setPool(p => p ? [...p, item] : p);
+      }
     }
     setInput('');
     setRevealed(null);
@@ -467,6 +483,10 @@ function ReversePractice({ verbs, tenses, onExit }: { verbs: VerbCard[]; tenses:
         expected,
         correct
       });
+      // 错题压回队列末尾，直到全部做对
+      if (!correct) {
+        setPool(p => p ? [...p, item] : p);
+      }
     }
     setPersonPicks(new Set());
     setMeaningInput('');

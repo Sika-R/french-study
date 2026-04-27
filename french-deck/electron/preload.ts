@@ -7,7 +7,10 @@ const api = {
     list: (opts?: { limit?: number; offset?: number; search?: string }) =>
       ipcRenderer.invoke('words:list', opts ?? {}),
     delete: (id: number) => ipcRenderer.invoke('words:delete', id),
-    count: () => ipcRenderer.invoke('words:count')
+    count: () => ipcRenderer.invoke('words:count'),
+    byDate: () => ipcRenderer.invoke('words:byDate'),
+    recommended: () => ipcRenderer.invoke('words:recommended'),
+    byIds: (ids: number[]) => ipcRenderer.invoke('words:byIds', ids)
   },
   lookup: {
     word: (surface: string) => ipcRenderer.invoke('lookup:word', surface),

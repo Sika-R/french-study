@@ -114,4 +114,42 @@ export function registerWordHandlers(): void {
     const row = db.prepare('SELECT COUNT(*) AS c FROM words').get() as { c: number };
     return row.c;
   });
+
+  /** 按"录入日期"分组，返回 [{ day: 'YYYY-MM-DD', count, ids:[...] }] */
+  ipcMain.handle('words:byDate', () => {
+    const db = getDb();
+    return db.prepare(`
+      SELECT date(created_at/1000, 'unixepoch', 'localtime') AS day,
+             COUNT(*) AS count,
+             group_concat(id) AS ids
+      FROM words
+      GROUP BY day
+      ORDER BY day DESC
+    `).all().map((r: any) => ({
+      day: r.day,
+      count: r.count,
+      ids: r.ids.split(',').map((x: string) => parseInt(x, 10))
+    }));
+  });
+
+  /** 推荐：按 FSRS due 排序，到期/即将到期的全部 word_id（按到期升序） */
+  ipcMain.handle('words:recommended', () => {
+    const db = getDb();
+    const now = Date.now();
+    // 先到期的，加上 7 天内将到期的
+    const horizon = now + 7 * 24 * 60 * 60 * 1000;
+    return db.prepare(`
+      SELECT w.id FROM srs_state s JOIN words w ON w.id = s.word_id
+      WHERE s.due <= ?
+      ORDER BY s.due ASC
+    `).all(horizon).map((r: any) => r.id as number);
+  });
+
+  /** 给定一组 ids，返回完整 word 行（用于"开始复习"前预览） */
+  ipcMain.handle('words:byIds', (_e, ids: number[]) => {
+    if (!ids || ids.length === 0) return [];
+    const db = getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    return db.prepare(`SELECT * FROM words WHERE id IN (${placeholders})`).all(...ids);
+  });
 }

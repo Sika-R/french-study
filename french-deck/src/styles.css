@@ -37,13 +37,18 @@ body {
 }
 .row { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
 label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
-input, select, textarea {
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid #d4d6df;
   border-radius: 6px;
   font-size: 14px;
   background: white;
+}
+input[type="checkbox"], input[type="radio"] {
+  width: auto;
+  margin-right: 6px;
+  cursor: pointer;
 }
 button {
   background: #4361ee;

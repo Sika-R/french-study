@@ -335,15 +335,20 @@ export function registerPracticeHandlers(): void {
     return pool;
   });
 
-  /** 形容词阴阳变化池：用 lexique.findForm 找阴性形式 */
+  /** 形容词阴阳变化池：优先用 DB 里手工录入的 adj_forms，缺失时回退到 lexique 单数 */
   ipcMain.handle('practice:buildAdjPool', (_e, opts: { word_ids: number[] }) => {
     if (!opts.word_ids || opts.word_ids.length === 0) return [];
     const db = getDb();
+    type Forms = { m_sg: string; f_sg: string; m_pl: string | null; f_pl: string | null; m_sg_vowel: string | null };
     const pool: Array<{
       word: { id: number; lemma: string; translation_zh: string|null; translation_en: string|null };
-      masculine: string;
-      feminine: string;
+      forms: Forms;
     }> = [];
+
+    const formsStmt = db.prepare(
+      `SELECT form_kind, surface FROM adj_forms WHERE word_id = ?`
+    );
+
     for (const wid of opts.word_ids) {
       const word = db.prepare(
         `SELECT id, lemma, surface, gender, translation_zh, translation_en
@@ -353,16 +358,26 @@ export function registerPracticeHandlers(): void {
           translation_zh: string|null; translation_en: string|null } | undefined;
       if (!word) continue;
 
-      // 阳性 = lemma；阴性 = lexique 中 lemma+adj+f 的频率最高 surface
-      const masculine = lexique.findForm(word.lemma, 'adj', 'm') ?? word.lemma;
-      const feminine = lexique.findForm(word.lemma, 'adj', 'f');
-      if (!feminine) continue; // 找不到阴性形式 → 跳过该词
+      const dbRows = formsStmt.all(wid) as { form_kind: string; surface: string }[];
+      const dbForms: Record<string, string> = {};
+      for (const r of dbRows) dbForms[r.form_kind] = r.surface;
+
+      // 优先 DB；缺失时用 lexique 兜底（仅 m/f 单数）
+      const m_sg = dbForms.m_sg || lexique.findForm(word.lemma, 'adj', 'm') || word.lemma;
+      const f_sg = dbForms.f_sg || lexique.findForm(word.lemma, 'adj', 'f') || null;
+      const m_pl = dbForms.m_pl || null;
+      const f_pl = dbForms.f_pl || null;
+      const m_sg_vowel = dbForms.m_sg_vowel || null;
+
+      // 必须至少有 m_sg + f_sg 才能成题（最小可用集）
+      if (!f_sg) continue;
+
       pool.push({
         word: {
           id: word.id, lemma: word.lemma,
           translation_zh: word.translation_zh, translation_en: word.translation_en
         },
-        masculine, feminine
+        forms: { m_sg, f_sg, m_pl, f_pl, m_sg_vowel }
       });
     }
     // 洗牌

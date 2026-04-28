@@ -9,6 +9,7 @@ export interface LexEntry {
   lemma: string;     // lemme
   pos: LexPos;
   gender: 'm' | 'f' | null;
+  number: 's' | 'p' | null; // Lexique nombre 列
   freq: number;      // freqlemfilms2 (字幕频率), 用于消歧
 }
 
@@ -56,7 +57,7 @@ class LexiqueIndex {
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
     let header: string[] | null = null;
-    let iOrtho = -1, iLemme = -1, iCgram = -1, iGenre = -1, iFreq = -1;
+    let iOrtho = -1, iLemme = -1, iCgram = -1, iGenre = -1, iNombre = -1, iFreq = -1;
 
     for await (const line of rl) {
       if (!line) continue;
@@ -67,6 +68,7 @@ class LexiqueIndex {
         iLemme = header.indexOf('lemme');
         iCgram = header.indexOf('cgram');
         iGenre = header.indexOf('genre');
+        iNombre = header.indexOf('nombre');
         iFreq = header.indexOf('freqlemfilms2');
         continue;
       }
@@ -74,6 +76,7 @@ class LexiqueIndex {
       const lemme = cols[iLemme]?.toLowerCase();
       const cgram = cols[iCgram] ?? '';
       const genre = cols[iGenre] ?? '';
+      const nombre = iNombre >= 0 ? (cols[iNombre] ?? '') : '';
       const freqStr = (cols[iFreq] ?? '0').replace(',', '.');
       const freq = parseFloat(freqStr) || 0;
       if (!surface || !lemme) continue;
@@ -82,6 +85,7 @@ class LexiqueIndex {
         lemma: lemme,
         pos: mapPos(cgram),
         gender: genre === 'm' ? 'm' : genre === 'f' ? 'f' : null,
+        number: nombre === 's' ? 's' : nombre === 'p' ? 'p' : null,
         freq
       };
       const list = this.bySurface.get(surface);
@@ -114,6 +118,11 @@ class LexiqueIndex {
     // 单数形通常频率高于复数（belle > belles），freq 排序后取首
     matches.sort((a, b) => b.freq - a.freq);
     return matches[0].surface;
+  }
+
+  /** 给定 lemma，返回所有该 lemma 下的 entry（各种 pos / gender / number 的混合） */
+  entriesByLemma(lemma: string): LexEntry[] {
+    return this.byLemma.get(lemma.trim().toLowerCase()) ?? [];
   }
 
   isReady(): boolean {

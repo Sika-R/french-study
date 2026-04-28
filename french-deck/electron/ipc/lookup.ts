@@ -39,6 +39,54 @@ function isImpersonalVerb(lemma: string): boolean {
   return KNOWN_IMPERSONAL_VERBS.has(lemma.toLowerCase());
 }
 
+/**
+ * 元音前阳性单数形式（少数特殊形容词）。
+ * 例：beau → bel; nouveau → nouvel; vieux → vieil。
+ * 这些形式 Lexique 里没有专门字段标，硬编码兜底。
+ */
+const VOWEL_FORM_MAP: Record<string, string> = {
+  beau: 'bel',
+  nouveau: 'nouvel',
+  vieux: 'vieil',
+  mou: 'mol',
+  fou: 'fol'
+};
+
+export interface AdjFormsResult {
+  m_sg: string | null;
+  f_sg: string | null;
+  m_pl: string | null;
+  f_pl: string | null;
+  m_sg_vowel: string | null;
+}
+
+/** 给定 lemma，从 Lexique 拼出 5 种 adj 形（找不到的返回 null） */
+function pickAdjForms(lemma: string): AdjFormsResult {
+  const all = lexique.entriesByLemma(lemma).filter(e => e.pos === 'adj');
+  const pickHighest = (g: 'm' | 'f', n: 's' | 'p'): string | null => {
+    const cand = all.filter(e => e.gender === g && e.number === n);
+    if (cand.length === 0) {
+      // 兼容：有的 entry 没有 number 标记 → 回退到只按 gender 取频率最高
+      if (n === 's') {
+        const fallback = all.filter(e => e.gender === g);
+        if (fallback.length === 0) return null;
+        fallback.sort((a, b) => b.freq - a.freq);
+        return fallback[0].surface;
+      }
+      return null;
+    }
+    cand.sort((a, b) => b.freq - a.freq);
+    return cand[0].surface;
+  };
+  return {
+    m_sg: pickHighest('m', 's') ?? lemma.toLowerCase(),
+    f_sg: pickHighest('f', 's'),
+    m_pl: pickHighest('m', 'p'),
+    f_pl: pickHighest('f', 'p'),
+    m_sg_vowel: VOWEL_FORM_MAP[lemma.toLowerCase()] ?? null
+  };
+}
+
 export function registerLookupHandlers(): void {
   ipcMain.handle('lookup:word', async (_e, surface: string): Promise<LookupResult> => {
     const s = (surface ?? '').trim();
@@ -91,5 +139,13 @@ export function registerLookupHandlers(): void {
 
   ipcMain.handle('lookup:tenses', (_e, infinitive: string) => {
     return verbiste.listTenses(infinitive);
+  });
+
+  /** 给定形容词 lemma，返回 5 种 form（找不到的为 null）。Lexique 已加载完才有结果。 */
+  ipcMain.handle('lookup:adjForms', async (_e, lemma: string): Promise<AdjFormsResult> => {
+    await lexique.ready();
+    const l = (lemma ?? '').trim();
+    if (!l) return { m_sg: null, f_sg: null, m_pl: null, f_pl: null, m_sg_vowel: null };
+    return pickAdjForms(l);
   });
 }

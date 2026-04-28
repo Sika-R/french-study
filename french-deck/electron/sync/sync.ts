@@ -11,7 +11,7 @@ import { getDb } from '../../server/db/client.js';
 import { loadConfig, saveConfig } from './config.js';
 import { fetchGist, patchGist, createGist, listMyGists, type GistFiles } from './gist.js';
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const GIST_DESCRIPTION = 'french-deck-sync';
 
 interface WordRow {
@@ -80,6 +80,12 @@ interface NoteReviewLogSerialized {
   rating: number;
 }
 
+interface AdjFormSerialized {
+  lemma: string;
+  form_kind: string;
+  surface: string;
+}
+
 interface Snapshot {
   schemaVersion: number;
   exportedAt: number;
@@ -89,6 +95,7 @@ interface Snapshot {
   note_srs_state: NoteSrsStateRowSerialized[];
   review_logs: ReviewLogSerialized[];
   note_review_logs: NoteReviewLogSerialized[];
+  adj_forms: AdjFormSerialized[];
 }
 
 interface SpellSessionFile {
@@ -137,11 +144,17 @@ function dumpSnapshot(): Snapshot {
     WHERE n.uuid IS NOT NULL AND n.uuid != ''
   `).all() as NoteReviewLogSerialized[];
 
+  const adjForms = db.prepare(`
+    SELECT w.lemma AS lemma, a.form_kind, a.surface
+    FROM adj_forms a JOIN words w ON w.id = a.word_id
+  `).all() as AdjFormSerialized[];
+
   return {
     schemaVersion: SCHEMA_VERSION,
     exportedAt: Date.now(),
     words, srs_state: srs, notes, note_srs_state: noteSrs,
-    review_logs: logs, note_review_logs: noteLogs
+    review_logs: logs, note_review_logs: noteLogs,
+    adj_forms: adjForms
   };
 }
 
@@ -150,13 +163,15 @@ function dumpSnapshot(): Snapshot {
 interface MergeCounts {
   words: number; srsState: number; notes: number;
   noteSrsState: number; reviewLogs: number; noteReviewLogs: number;
+  adjForms: number;
 }
 
 function mergeIntoLocal(remote: Snapshot): MergeCounts {
   const db = getDb();
   const counts: MergeCounts = {
     words: 0, srsState: 0, notes: 0,
-    noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0
+    noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0,
+    adjForms: 0
   };
 
   const tx = db.transaction(() => {
@@ -306,6 +321,20 @@ function mergeIntoLocal(remote: Snapshot): MergeCounts {
       insertNoteLog.run(nid, log.reviewed_at, log.rating);
       counts.noteReviewLogs++;
     }
+
+    // 7) adj_forms：按 (lemma, form_kind) upsert（INSERT OR REPLACE）
+    //    note: word_id 是本地自增；先按 lemma 找本地 id。删除本地多余行的语义不做（避免抖动）。
+    const upsertAdj = db.prepare(`
+      INSERT INTO adj_forms (word_id, form_kind, surface)
+      VALUES (?, ?, ?)
+      ON CONFLICT(word_id, form_kind) DO UPDATE SET surface = excluded.surface
+    `);
+    for (const f of (remote.adj_forms ?? [])) {
+      const wid = wordIdByLemma.get(f.lemma);
+      if (!wid) continue;
+      const result = upsertAdj.run(wid, f.form_kind, f.surface);
+      if (result.changes > 0) counts.adjForms++;
+    }
   });
   tx();
   return counts;
@@ -364,7 +393,7 @@ export async function runSync(opts: RunSyncOptions = {}): Promise<RunSyncResult>
           const id = await createGist(cfg.token, filesToCreate, GIST_DESCRIPTION);
           saveConfig({ gistId: id, lastSyncAt: Date.now(), lastError: null });
           console.log(`[sync] created gist ${id}`);
-          return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0 } };
+          return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0, adjForms: 0 } };
         }
       } catch (err) {
         // listMyGists 失败 → 退回到旧逻辑（直接 create）；通常是 token 没 read scope
@@ -378,7 +407,7 @@ export async function runSync(opts: RunSyncOptions = {}): Promise<RunSyncResult>
         const id = await createGist(cfg.token, filesToCreate, GIST_DESCRIPTION);
         saveConfig({ gistId: id, lastSyncAt: Date.now(), lastError: null });
         console.log(`[sync] created gist ${id}`);
-        return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0 } };
+        return { ok: true, mergedCounts: { words: 0, srsState: 0, notes: 0, noteSrsState: 0, reviewLogs: 0, noteReviewLogs: 0, adjForms: 0 } };
       }
     } else {
       remoteFiles = await fetchGist(cfg.token, cfg.gistId);
@@ -443,7 +472,8 @@ function snapshotToFiles(s: Snapshot): GistFiles {
     'notes.json': { content: JSON.stringify(s.notes, null, 2) },
     'note_srs_state.json': { content: JSON.stringify(s.note_srs_state, null, 2) },
     'review_logs.json': { content: JSON.stringify(s.review_logs, null, 2) },
-    'note_review_logs.json': { content: JSON.stringify(s.note_review_logs, null, 2) }
+    'note_review_logs.json': { content: JSON.stringify(s.note_review_logs, null, 2) },
+    'adj_forms.json': { content: JSON.stringify(s.adj_forms, null, 2) }
   };
 }
 
@@ -462,6 +492,7 @@ function filesToSnapshot(files: GistFiles): Snapshot {
     notes: get<NoteRowSerialized[]>('notes.json', []),
     note_srs_state: get<NoteSrsStateRowSerialized[]>('note_srs_state.json', []),
     review_logs: get<ReviewLogSerialized[]>('review_logs.json', []),
-    note_review_logs: get<NoteReviewLogSerialized[]>('note_review_logs.json', [])
+    note_review_logs: get<NoteReviewLogSerialized[]>('note_review_logs.json', []),
+    adj_forms: get<AdjFormSerialized[]>('adj_forms.json', [])
   };
 }

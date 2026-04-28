@@ -48,6 +48,7 @@ export default function WordList() {
   const [dayFilter, setDayFilter] = useState<string>(''); // '' = 全部, 'YYYY-MM-DD'
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [editing, setEditing] = useState<WordRow | null>(null);
+  const [editingAdjForms, setEditingAdjForms] = useState<Record<string, string> | null>(null);
   const [busy, setBusy] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
 
@@ -161,7 +162,18 @@ export default function WordList() {
                   </span>
                 ) : (
                   <span style={{ display: 'flex', gap: 4 }}>
-                    <button className="ghost" onClick={() => setEditing(w)} disabled={busy} style={{ padding: '4px 8px', fontSize: 12 }}>编辑</button>
+                    <button className="ghost" onClick={async () => {
+                      // 预拉 adj_forms（仅 adj 才需要，但调用统一）
+                      let forms: Record<string, string> | null = null;
+                      if (w.pos === 'adj') {
+                        try {
+                          const map = await (window as any).api.words.adjFormsByIds([w.id]) as Record<number, Record<string, string>>;
+                          forms = map[w.id] ?? null;
+                        } catch { /* ignore */ }
+                      }
+                      setEditingAdjForms(forms);
+                      setEditing(w);
+                    }} disabled={busy} style={{ padding: '4px 8px', fontSize: 12 }}>编辑</button>
                     <button className="ghost" onClick={() => setConfirmId(w.id)} disabled={busy} style={{ padding: '4px 8px', fontSize: 12 }}>删除</button>
                   </span>
                 )}
@@ -199,7 +211,8 @@ export default function WordList() {
       {editing && (
         <EditWordDialog
           word={editing}
-          onClose={() => setEditing(null)}
+          initialAdjForms={editingAdjForms ?? undefined}
+          onClose={() => { setEditing(null); setEditingAdjForms(null); }}
           onSaved={() => load()}
         />
       )}

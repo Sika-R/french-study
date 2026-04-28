@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import AccentInput from './AccentInput';
 
 export interface EditableWord {
   id: number;
@@ -12,19 +13,37 @@ export interface EditableWord {
   impersonal?: number | null;
 }
 
+type AdjFormKind = 'm_sg' | 'f_sg' | 'm_pl' | 'f_pl' | 'm_sg_vowel';
+const ADJ_FORM_ORDER: { kind: AdjFormKind; label: string }[] = [
+  { kind: 'm_sg', label: '阳性单数' },
+  { kind: 'f_sg', label: '阴性单数' },
+  { kind: 'm_pl', label: '阳性复数' },
+  { kind: 'f_pl', label: '阴性复数' },
+  { kind: 'm_sg_vowel', label: '元音前阳单 (可选)' }
+];
+
 interface Props {
   word: EditableWord;
+  /** 已存在的形容词形式（用于 pos=adj 时回填） */
+  initialAdjForms?: Partial<Record<AdjFormKind, string>>;
   onClose: () => void;
   onSaved: () => void;
 }
 
-export default function EditWordDialog({ word, onClose, onSaved }: Props) {
+export default function EditWordDialog({ word, initialAdjForms, onClose, onSaved }: Props) {
   const [pos, setPos] = useState(word.pos);
   const [gender, setGender] = useState<'m' | 'f' | ''>(word.gender ?? '');
   const [zh, setZh] = useState(word.translation_zh ?? '');
   const [en, setEn] = useState(word.translation_en ?? '');
   const [example, setExample] = useState(word.example_fr ?? '');
   const [impersonal, setImpersonal] = useState<boolean>(!!word.impersonal);
+  const [adjForms, setAdjForms] = useState<Record<AdjFormKind, string>>({
+    m_sg: initialAdjForms?.m_sg ?? '',
+    f_sg: initialAdjForms?.f_sg ?? '',
+    m_pl: initialAdjForms?.m_pl ?? '',
+    f_pl: initialAdjForms?.f_pl ?? '',
+    m_sg_vowel: initialAdjForms?.m_sg_vowel ?? ''
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +59,7 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
     setSaving(true);
     setError(null);
     try {
-      const patch = {
+      const patch: any = {
         pos: pos.trim() || word.pos,
         gender: pos === 'noun' ? (gender || null) : null,
         translation_zh: zh.trim() || null,
@@ -48,6 +67,15 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
         example_fr: example.trim() || null,
         impersonal: (pos === 'verb' && impersonal) ? 1 : 0
       };
+      // 形容词：整组替换（清空所有 form 也是合法操作）
+      if (pos === 'adj') {
+        patch.adjForms = (Object.keys(adjForms) as AdjFormKind[])
+          .filter(k => adjForms[k].trim())
+          .map(k => ({ kind: k, surface: adjForms[k].trim() }));
+      } else {
+        // 切到非 adj：清空 forms
+        patch.adjForms = [];
+      }
       await window.api.words.update(word.id, patch);
       onSaved();
       onClose();
@@ -128,6 +156,29 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
             <textarea value={example} onChange={e => setExample(e.target.value)} rows={3} />
           </div>
         </div>
+
+        {pos === 'adj' && (
+          <div style={{
+            marginTop: 4, marginBottom: 8, padding: 12,
+            background: '#f6f7fb', borderRadius: 8, border: '1px solid #e6e8ef'
+          }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              形容词的各种形式（不需要的留空；元音前阳单仅 beau/nouveau/vieux 等需要）
+            </div>
+            {ADJ_FORM_ORDER.map(({ kind, label }) => (
+              <div key={kind} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+                <div style={{ width: 110, color: '#666', fontSize: 13 }}>{label}</div>
+                <div style={{ flex: 1 }}>
+                  <AccentInput
+                    value={adjForms[kind]}
+                    onChange={v => setAdjForms(s => ({ ...s, [kind]: v }))}
+                    placeholder={kind === 'm_sg_vowel' ? '如 bel（没有就留空）' : ''}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {pos === 'verb' && (
           <div className="row">

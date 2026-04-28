@@ -20,6 +20,21 @@ export default function AddWord() {
   const [en, setEn] = useState('');
   const [example, setExample] = useState('');
   const [impersonal, setImpersonal] = useState(false);
+  // 形容词 5 种 form：阳单/阴单/阳复/阴复/元音前阳单。空字符串 = 该格未填。
+  type AdjFormKind = 'm_sg' | 'f_sg' | 'm_pl' | 'f_pl' | 'm_sg_vowel';
+  const ADJ_FORM_ORDER: { kind: AdjFormKind; label: string }[] = [
+    { kind: 'm_sg', label: '阳性单数' },
+    { kind: 'f_sg', label: '阴性单数' },
+    { kind: 'm_pl', label: '阳性复数' },
+    { kind: 'f_pl', label: '阴性复数' },
+    { kind: 'm_sg_vowel', label: '元音前阳单 (可选)' }
+  ];
+  const [adjForms, setAdjForms] = useState<Record<AdjFormKind, string>>({
+    m_sg: '', f_sg: '', m_pl: '', f_pl: '', m_sg_vowel: ''
+  });
+  const [adjAutoFilled, setAdjAutoFilled] = useState<Record<AdjFormKind, boolean>>({
+    m_sg: false, f_sg: false, m_pl: false, f_pl: false, m_sg_vowel: false
+  });
   const [hint, setHint] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string>('');
@@ -89,11 +104,57 @@ export default function AddWord() {
   const setGenderManual = (v: 'm' | 'f' | '') => { setGender(v); setAutoFilled(a => ({ ...a, gender: false })); };
   const setEnManual = (v: string) => { setEn(v); setAutoFilled(a => ({ ...a, en: false })); };
   const setImpersonalManual = (v: boolean) => { setImpersonal(v); setAutoFilled(a => ({ ...a, impersonal: false })); };
+  const setAdjFormManual = (kind: AdjFormKind, v: string) => {
+    setAdjForms(s => ({ ...s, [kind]: v }));
+    setAdjAutoFilled(s => ({ ...s, [kind]: false }));
+  };
+
+  // pos=adj 且 lemma 有值时，自动查 5 种 form 填到对应格子（已经手动填的格子不覆盖）
+  useEffect(() => {
+    if (pos !== 'adj') return;
+    const l = lemma.trim();
+    if (!l) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await (window as any).api.lookup.adjForms(l) as {
+          m_sg: string | null; f_sg: string | null;
+          m_pl: string | null; f_pl: string | null;
+          m_sg_vowel: string | null;
+        };
+        if (cancelled) return;
+        setAdjForms(prev => {
+          const next = { ...prev };
+          (Object.keys(r) as AdjFormKind[]).forEach(k => {
+            const val = r[k];
+            // 没值 → 不动；有值 → 仅当当前格为空 OR 之前是自动填的才覆盖
+            if (val == null) return;
+            if (!prev[k] || adjAutoFilled[k]) {
+              next[k] = val;
+            }
+          });
+          return next;
+        });
+        setAdjAutoFilled(prev => {
+          const next = { ...prev };
+          (Object.keys(r) as AdjFormKind[]).forEach(k => {
+            if (r[k] != null && (adjForms[k] === '' || prev[k])) next[k] = true;
+          });
+          return next;
+        });
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  // 注意：adjForms / adjAutoFilled 不放进依赖（否则会循环触发）
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pos, lemma]);
 
   const reset = () => {
     setSurface(''); setLemma(''); setPos(''); setGender('');
     setZh(''); setEn(''); setExample(''); setHint(''); setImpersonal(false);
     setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
+    setAdjForms({ m_sg: '', f_sg: '', m_pl: '', f_pl: '', m_sg_vowel: '' });
+    setAdjAutoFilled({ m_sg: false, f_sg: false, m_pl: false, f_pl: false, m_sg_vowel: false });
   };
 
   const save = async () => {
@@ -111,7 +172,12 @@ export default function AddWord() {
       translation_zh: zh.trim() || null,
       translation_en: en.trim() || null,
       example_fr: example.trim() || null,
-      impersonal: (pos.trim() === 'verb' && impersonal) ? 1 : 0
+      impersonal: (pos.trim() === 'verb' && impersonal) ? 1 : 0,
+      adjForms: pos.trim() === 'adj'
+        ? (Object.keys(adjForms) as AdjFormKind[])
+            .filter(k => adjForms[k].trim())
+            .map(k => ({ kind: k, surface: adjForms[k].trim() }))
+        : undefined
     };
 
     try {
@@ -217,6 +283,29 @@ export default function AddWord() {
           <textarea value={example} onChange={e => setExample(e.target.value)} rows={2} />
         </div>
       </div>
+
+      {pos === 'adj' && (
+        <div style={{
+          marginTop: 4, marginBottom: 12, padding: 12,
+          background: '#f6f7fb', borderRadius: 8, border: '1px solid #e6e8ef'
+        }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            形容词的各种形式（自动从词典查，不全可手动补；元音前阳单仅 beau/nouveau/vieux 等需要）
+          </div>
+          {ADJ_FORM_ORDER.map(({ kind, label }) => (
+            <div key={kind} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+              <div style={{ width: 110, color: '#666', fontSize: 13 }}>{label}</div>
+              <div style={{ flex: 1 }}>
+                <AccentInput
+                  value={adjForms[kind]}
+                  onChange={v => setAdjFormManual(kind, v)}
+                  placeholder={kind === 'm_sg_vowel' ? '如 bel（没有就留空）' : ''}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {pos === 'verb' && (
         <div className="row">

@@ -133,6 +133,19 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
   // ────────── v5 → v6: words 加 impersonal（非人称动词，只考 il） ──────────
   (db) => {
     addColumnIfMissing(db, 'words', 'impersonal', 'INTEGER NOT NULL DEFAULT 0');
+  },
+
+  // ────────── v6 → v7: adj_forms 表（每个形容词最多 5 种形式） ──────────
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS adj_forms (
+        word_id    INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+        form_kind  TEXT    NOT NULL,
+        surface    TEXT    NOT NULL,
+        PRIMARY KEY (word_id, form_kind)
+      );
+      CREATE INDEX IF NOT EXISTS idx_adj_forms_word ON adj_forms(word_id);
+    `);
   }
 
   // 以后加新 schema 在下面 push 新函数即可，不要修改已有的。

@@ -249,12 +249,23 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
         isRetry: true,
         retryTenseId: item.tenseId
       });
+    } else if (item?.kind === 'card' && item.card.pos === 'adj' && config.enableAdj && !item.spellOnly) {
+      // 形容词：跳过拼写阶段，直接给原型 + 翻译，让用户填所有变形
+      // （如果连一个 form 都拉不到，就退回到拼写阶段）
+      (async () => {
+        const cells = await buildAdjCells(item.card.id);
+        if (cells.length > 0) {
+          setSubStage({ type: 'adj', cells, submitted: false });
+        }
+      })();
     }
-    // 注意：deps 故意不包含 queue。queue 是 append-only，当前位置 queue[idx] 不会被改写；
+    // 注意：deps 故意不包含整个 queue。queue 是 append-only，当前位置 queue[idx] 不会被改写；
     // 把 queue 作为 dep 会导致每次往队尾 push（完成子练习 / 错题压回）都把当前 subStage 清掉，
     // 表现为「做变位时突然跳回原型阶段」。
+    // 但首次 load 时 idx=0 而 queue 是空，等异步 setQueue 后效果不会再触发，
+    // 因此显式追踪 queue[idx] 的"身份"（kind+card.id+spellOnly）作为 dep。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx]);
+  }, [idx, queue[idx]?.kind, queue[idx]?.card?.id, (queue[idx]?.kind === 'card' && queue[idx]?.spellOnly) || false]);
 
   // 每张新卡：根据词性把焦点放在 le radio (noun) 或拼写 input (其它)
   useEffect(() => {
@@ -389,6 +400,28 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     });
   };
 
+  // 给 adj 卡片构建 subStage cells（拼写阶段后用，也供 adj 跳过拼写直接进入用）
+  const buildAdjCells = async (cardId: number): Promise<SubCellAnswer[]> => {
+    const pool = await window.api.practice.buildAdjPool({ word_ids: [cardId] }) as Array<{
+      word: any;
+      forms: {
+        m_sg: string; f_sg: string;
+        m_pl: string | null; f_pl: string | null; m_sg_vowel: string | null;
+      };
+    }>;
+    const item = pool[0];
+    if (!item) return [];
+    const order: Array<keyof typeof item.forms> = ['m_sg', 'f_sg', 'm_pl', 'f_pl', 'm_sg_vowel'];
+    return order
+      .filter(k => !!item.forms[k])
+      .map(k => ({
+        key: `adj:${k}`,
+        expected: item.forms[k]!,
+        user: '',
+        done: false
+      }));
+  };
+
   // 拼写"下一张"按钮
   const onSpellNext = async () => {
     if (!spellRevealed) return;
@@ -404,23 +437,12 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
     // 不论拼写对错，都按 pos 决定要不要进子练习（让你练完变位/阴阳）
     if (!spellOnly && card.pos === 'adj' && config.enableAdj) {
-      // 拉阴性形式
-      const pool = await window.api.practice.buildAdjPool({ word_ids: [card.id] }) as Array<{
-        word: any; masculine: string; feminine: string;
-      }>;
-      const item = pool[0];
-      if (item) {
-        setSubStage({
-          type: 'adj',
-          cells: [
-            { key: 'adj:m', expected: item.masculine, user: '', done: false },
-            { key: 'adj:f', expected: item.feminine, user: '', done: false }
-          ],
-          submitted: false
-        });
+      const cells = await buildAdjCells(card.id);
+      if (cells.length > 0) {
+        setSubStage({ type: 'adj', cells, submitted: false });
         return;
       }
-      // 没找到阴性形式 → 跳过子练习
+      // 没找到任何形式 → 跳过子练习
     }
 
     if (!spellOnly && card.pos === 'verb' && config.enableVerb && config.verbTenseIds.length > 0) {
@@ -469,8 +491,15 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     // 写日志：每个 cell 写一条（mode=adj/drill 之类）
     if (subStage.type === 'adj') {
       const allDone = updated.every(c => c.done);
-      const userStr = `阳: ${updated.find(c => c.key === 'adj:m')?.user || '(空)'} | 阴: ${updated.find(c => c.key === 'adj:f')?.user || '(空)'}`;
-      const expStr = `阳: ${updated.find(c => c.key === 'adj:m')?.expected} | 阴: ${updated.find(c => c.key === 'adj:f')?.expected}`;
+      const ADJ_LABEL: Record<string, string> = {
+        'adj:m_sg': '阳单', 'adj:f_sg': '阴单',
+        'adj:m_pl': '阳复', 'adj:f_pl': '阴复',
+        'adj:m_sg_vowel': '元音前',
+        // 老数据兼容（旧 session 里可能还有 adj:m / adj:f 这种 key）
+        'adj:m': '阳', 'adj:f': '阴'
+      };
+      const userStr = updated.map(c => `${ADJ_LABEL[c.key] ?? c.key}:${c.user.trim() || '(空)'}`).join(' | ');
+      const expStr = updated.map(c => `${ADJ_LABEL[c.key] ?? c.key}:${c.expected}`).join(' | ');
       // 只在第一次 round 写日志（避免重复填错重复算）
       if (!subStage.submitted) {
         await window.api.practice.submitOne({
@@ -626,16 +655,31 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
         </div>
 
         <h3 style={{ marginBottom: 4 }}>
-          ✓ {card!.lemma} <span className="muted" style={{ fontSize: 14 }}>
-            ({card!.translation_zh ?? card!.translation_en ?? ''})
-          </span>
+          {subStage.type === 'adj' ? (
+            // 形容词整轮（含 retry）都不显示原型，只给翻译
+            <>{card!.translation_zh ?? card!.translation_en ?? '(无翻译)'}
+              {card!.translation_zh && card!.translation_en && (
+                <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>· {card!.translation_en}</span>
+              )}
+            </>
+          ) : (
+            <>✓ {card!.lemma} <span className="muted" style={{ fontSize: 14 }}>
+              ({card!.translation_zh ?? card!.translation_en ?? ''})
+            </span></>
+          )}
         </h3>
         <div className="muted" style={{ marginBottom: 12, fontSize: 13 }}>
-          {subStage.isRetry ? '只重做之前错的几个' : (subStage.type === 'adj' ? '填写阳性 / 阴性形式' : '填写各人称变位')}
+          {subStage.isRetry ? '只重做之前错的几个' : (subStage.type === 'adj' ? '填写所有可用形式（阳/阴 × 单/复，及元音前阳单）' : '填写各人称变位')}
         </div>
         {subStage.cells.map((c, i) => {
+          const ADJ_LABEL: Record<string, string> = {
+            'adj:m_sg': '阳性单数', 'adj:f_sg': '阴性单数',
+            'adj:m_pl': '阳性复数', 'adj:f_pl': '阴性复数',
+            'adj:m_sg_vowel': '元音前阳单',
+            'adj:m': '阳性 (m)', 'adj:f': '阴性 (f)' // 老数据兼容
+          };
           const label = subStage.type === 'adj'
-            ? (c.key === 'adj:m' ? '阳性 (m)' : '阴性 (f)')
+            ? (ADJ_LABEL[c.key] ?? c.key)
             : PERSON_LABELS[parseInt(c.key.split(':')[2], 10)];
           const wrong = subStage.submitted && !c.done;
           const right = c.done;

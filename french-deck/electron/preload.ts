@@ -11,13 +11,15 @@ const api = {
     byDate: () => ipcRenderer.invoke('words:byDate'),
     recommended: () => ipcRenderer.invoke('words:recommended'),
     byIds: (ids: number[]) => ipcRenderer.invoke('words:byIds', ids),
-    idsByLemmas: (lemmas: string[]) => ipcRenderer.invoke('words:idsByLemmas', lemmas)
+    idsByLemmas: (lemmas: string[]) => ipcRenderer.invoke('words:idsByLemmas', lemmas),
+    adjFormsByIds: (ids: number[]) => ipcRenderer.invoke('words:adjFormsByIds', ids)
   },
   lookup: {
     word: (surface: string) => ipcRenderer.invoke('lookup:word', surface),
     conjugate: (infinitive: string, mode: string, tense: string, person: number) =>
       ipcRenderer.invoke('lookup:conjugate', infinitive, mode, tense, person),
-    tenses: (infinitive: string) => ipcRenderer.invoke('lookup:tenses', infinitive)
+    tenses: (infinitive: string) => ipcRenderer.invoke('lookup:tenses', infinitive),
+    adjForms: (lemma: string) => ipcRenderer.invoke('lookup:adjForms', lemma)
   },
   review: {
     queue: (limit?: number) => ipcRenderer.invoke('review:queue', limit ?? 30),

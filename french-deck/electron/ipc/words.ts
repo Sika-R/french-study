@@ -13,7 +13,11 @@ export interface WordInput {
   example_fr?: string | null;
   notes?: string | null;
   impersonal?: 0 | 1;
+  /** 形容词专用：5 种形式（缺的不传，整组替换语义） */
+  adjForms?: Array<{ kind: string; surface: string }>;
 }
+
+export const ADJ_FORM_KINDS = ['m_sg', 'f_sg', 'm_pl', 'f_pl', 'm_sg_vowel'] as const;
 
 export interface WordRow extends WordInput {
   id: number;
@@ -63,6 +67,15 @@ export function registerWordHandlers(): void {
       });
       const wordId = Number(info.lastInsertRowid);
       insertSrs.run(newCardRow(wordId));
+      // adj_forms：覆盖式写入
+      if (data.pos === 'adj' && data.adjForms && data.adjForms.length > 0) {
+        const insAdj = db.prepare('INSERT INTO adj_forms (word_id, form_kind, surface) VALUES (?, ?, ?)');
+        for (const f of data.adjForms) {
+          if (!f.surface || !f.surface.trim()) continue;
+          if (!ADJ_FORM_KINDS.includes(f.kind as any)) continue;
+          insAdj.run(wordId, f.kind, f.surface.trim().toLowerCase());
+        }
+      }
       return wordId;
     });
 
@@ -83,9 +96,28 @@ export function registerWordHandlers(): void {
         params[f] = (patch as any)[f];
       }
     }
-    if (sets.length === 0) return false;
-    sets.push(`updated_at = @updated_at`);
-    db.prepare(`UPDATE words SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    const tx = db.transaction(() => {
+      if (sets.length > 0) {
+        sets.push(`updated_at = @updated_at`);
+        db.prepare(`UPDATE words SET ${sets.join(', ')} WHERE id = @id`).run(params);
+      }
+      // adjForms：单独处理（即使没有其他字段变化，也允许只改 forms）
+      if (patch.adjForms !== undefined) {
+        db.prepare('DELETE FROM adj_forms WHERE word_id = ?').run(id);
+        const insAdj = db.prepare('INSERT INTO adj_forms (word_id, form_kind, surface) VALUES (?, ?, ?)');
+        for (const f of patch.adjForms) {
+          if (!f.surface || !f.surface.trim()) continue;
+          if (!ADJ_FORM_KINDS.includes(f.kind as any)) continue;
+          insAdj.run(id, f.kind, f.surface.trim().toLowerCase());
+        }
+        // 即使没改 word 表的字段，也要 bump updated_at（让 sync 知道）
+        if (sets.length === 0) {
+          db.prepare('UPDATE words SET updated_at = ? WHERE id = ?').run(params.updated_at, id);
+        }
+      }
+    });
+    if (sets.length === 0 && patch.adjForms === undefined) return false;
+    tx();
     scheduleSync();
     return true;
   });
@@ -170,6 +202,22 @@ export function registerWordHandlers(): void {
       .all(...lemmas) as { id: number; lemma: string }[];
     const out: Record<string, number> = {};
     for (const r of rows) out[r.lemma] = r.id;
+    return out;
+  });
+
+  /** 给定一组 word_id，返回 word_id → adj_forms 字典 */
+  ipcMain.handle('words:adjFormsByIds', (_e, ids: number[]) => {
+    if (!ids || ids.length === 0) return {} as Record<number, Record<string, string>>;
+    const db = getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT word_id, form_kind, surface FROM adj_forms WHERE word_id IN (${placeholders})`
+    ).all(...ids) as { word_id: number; form_kind: string; surface: string }[];
+    const out: Record<number, Record<string, string>> = {};
+    for (const r of rows) {
+      if (!out[r.word_id]) out[r.word_id] = {};
+      out[r.word_id][r.form_kind] = r.surface;
+    }
     return out;
   });
 }

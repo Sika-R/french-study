@@ -32,6 +32,8 @@ export default function AddWord() {
 
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    // 改 surface 就视为「开始录入新词」，清掉残留的重复确认横幅
+    if (duplicateAsk) setDuplicateAsk(null);
     if (!surface.trim()) {
       setHint('');
       // surface 清空时，把所有自动填的字段一起清掉（手动填的保留）

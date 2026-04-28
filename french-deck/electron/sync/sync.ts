@@ -11,7 +11,7 @@ import { getDb } from '../../server/db/client.js';
 import { loadConfig, saveConfig } from './config.js';
 import { fetchGist, patchGist, createGist, listMyGists, type GistFiles } from './gist.js';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 const GIST_DESCRIPTION = 'french-deck-sync';
 
 interface WordRow {
@@ -24,6 +24,8 @@ interface WordRow {
   example_fr: string | null;
   notes: string | null;
   impersonal: number;
+  lemma_plural: string | null;
+  lemma_feminine: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -110,6 +112,7 @@ function dumpSnapshot(): Snapshot {
   const words = db.prepare(`
     SELECT lemma, surface, pos, gender, translation_zh, translation_en,
            example_fr, notes, COALESCE(impersonal, 0) AS impersonal,
+           lemma_plural, lemma_feminine,
            created_at, COALESCE(updated_at, created_at) AS updated_at
     FROM words
   `).all() as WordRow[];
@@ -178,14 +181,16 @@ function mergeIntoLocal(remote: Snapshot): MergeCounts {
     // 1) words：upsert by lemma，仅当 remote.updated_at 更新
     const upsertWord = db.prepare(`
       INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en,
-                         example_fr, notes, impersonal, created_at, updated_at)
+                         example_fr, notes, impersonal, lemma_plural, lemma_feminine, created_at, updated_at)
       VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en,
-              @example_fr, @notes, @impersonal, @created_at, @updated_at)
+              @example_fr, @notes, @impersonal, @lemma_plural, @lemma_feminine, @created_at, @updated_at)
       ON CONFLICT(lemma) DO UPDATE SET
         surface=excluded.surface, pos=excluded.pos, gender=excluded.gender,
         translation_zh=excluded.translation_zh, translation_en=excluded.translation_en,
         example_fr=excluded.example_fr, notes=excluded.notes,
         impersonal=excluded.impersonal,
+        lemma_plural=excluded.lemma_plural,
+        lemma_feminine=excluded.lemma_feminine,
         updated_at=excluded.updated_at
       WHERE excluded.updated_at > COALESCE(words.updated_at, words.created_at)
     `);
@@ -203,6 +208,8 @@ function mergeIntoLocal(remote: Snapshot): MergeCounts {
         gender: w.gender, translation_zh: w.translation_zh,
         translation_en: w.translation_en, example_fr: w.example_fr,
         notes: w.notes, impersonal: w.impersonal ?? 0,
+        lemma_plural: w.lemma_plural ?? null,
+        lemma_feminine: w.lemma_feminine ?? null,
         created_at: w.created_at, updated_at: w.updated_at
       });
       if (result.changes > 0) counts.words++;

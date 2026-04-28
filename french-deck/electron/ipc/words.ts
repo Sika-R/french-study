@@ -13,6 +13,10 @@ export interface WordInput {
   example_fr?: string | null;
   notes?: string | null;
   impersonal?: 0 | 1;
+  /** 名词专用：不规则复数；regular 留空/null */
+  lemma_plural?: string | null;
+  /** 名词专用：阴性同源词（chat→chatte） */
+  lemma_feminine?: string | null;
   /** 形容词专用：5 种形式（缺的不传，整组替换语义） */
   adjForms?: Array<{ kind: string; surface: string }>;
 }
@@ -43,8 +47,8 @@ export function registerWordHandlers(): void {
     }
 
     const insertWord = db.prepare(`
-      INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en, example_fr, notes, impersonal, created_at, updated_at)
-      VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en, @example_fr, @notes, @impersonal, @created_at, @updated_at)
+      INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en, example_fr, notes, impersonal, lemma_plural, lemma_feminine, created_at, updated_at)
+      VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en, @example_fr, @notes, @impersonal, @lemma_plural, @lemma_feminine, @created_at, @updated_at)
     `);
     const insertSrs = db.prepare(`
       INSERT INTO srs_state (word_id, due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, state, last_review)
@@ -62,6 +66,8 @@ export function registerWordHandlers(): void {
         example_fr: data.example_fr ?? null,
         notes: data.notes ?? null,
         impersonal: data.impersonal ? 1 : 0,
+        lemma_plural: data.lemma_plural ?? null,
+        lemma_feminine: data.lemma_feminine ?? null,
         created_at: now,
         updated_at: now
       });
@@ -87,7 +93,7 @@ export function registerWordHandlers(): void {
   /** 用户已存在 → 选择「覆盖」时调用：更新翻译 / 词性等，但保留 SRS 进度 */
   ipcMain.handle('words:update', (_e, id: number, patch: Partial<WordInput>): boolean => {
     const db = getDb();
-    const fields = ['lemma', 'surface', 'pos', 'gender', 'translation_zh', 'translation_en', 'example_fr', 'notes', 'impersonal'] as const;
+    const fields = ['lemma', 'surface', 'pos', 'gender', 'translation_zh', 'translation_en', 'example_fr', 'notes', 'impersonal', 'lemma_plural', 'lemma_feminine'] as const;
     const sets: string[] = [];
     const params: any = { id, updated_at: Date.now() };
     for (const f of fields) {

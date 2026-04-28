@@ -12,6 +12,8 @@ interface WordRow {
   example_fr: string | null;
   notes: string | null;
   impersonal: number | null;
+  lemma_plural: string | null;
+  lemma_feminine: string | null;
   created_at: number;
 }
 

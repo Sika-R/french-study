@@ -10,6 +10,8 @@ interface QueueCard {
   gender: 'm' | 'f' | null;
   translation_zh: string | null;
   translation_en: string | null;
+  lemma_plural?: string | null;
+  lemma_feminine?: string | null;
 }
 
 interface TenseDef {
@@ -49,6 +51,7 @@ interface SavedSession {
   /** 当前卡是否已经过了拼写阶段（处于子练习中或刚拼对待按"继续"） */
   spellRevealed: { correct: boolean; expected: string } | null;
   spellInput: string;
+  spellInputF?: string;
   genderPick: 'm' | 'f' | '';
   subStage: SubStage | null;
   savedAt: number;
@@ -84,7 +87,9 @@ interface SubCellAnswer {
 
 /** queue 里的一项：要么是完整卡片（拼写+所有子练习），要么是只做指定错题的补错组 */
 type QueueItem =
-  | { kind: 'card'; card: QueueCard; spellOnly?: boolean }
+  | { kind: 'card'; card: QueueCard; spellOnly?: boolean;
+      /** 阴阳性双格名词重做时：标记哪一格上一轮已经对了，本轮锁定免填 */
+      partialDone?: { m?: boolean; f?: boolean } }
   | {
       kind: 'retry';
       card: QueueCard;
@@ -116,6 +121,8 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   // ── 拼写阶段状态 ──
   const [spellInput, setSpellInput] = useState('');
+  /** 名词且有阴性同源词时，第二格用来填阴性（chat 题里：spellInput=chat, spellInputF=chatte） */
+  const [spellInputF, setSpellInputF] = useState('');
   const [genderPick, setGenderPick] = useState<'m' | 'f' | ''>('');
   const [spellRevealed, setSpellRevealed] = useState<{ correct: boolean; expected: string } | null>(null);
   // 揭示答案后的短暂"防误按"窗口：800ms 内不能点下一张/下一时态，避免连按 Enter 直接跳过
@@ -174,6 +181,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
           setIdx(newIdx);
           setPendingCardRetry(saved.pendingCardRetry);
           setSpellInput(saved.spellInput || '');
+          setSpellInputF(saved.spellInputF || '');
           setGenderPick(saved.genderPick || '');
           setSpellRevealed(saved.spellRevealed || null);
           setSubStage(saved.subStage || null);
@@ -207,6 +215,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   const resetSpellState = () => {
     setSpellInput('');
+    setSpellInputF('');
     setGenderPick('');
     setSpellRevealed(null);
   };
@@ -228,12 +237,12 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
       const data: SavedSession = {
         wordIds, wordLemmas: Array.from(lemmaSet),
         config, queue, idx, pendingCardRetry,
-        spellInput, genderPick, spellRevealed, subStage,
+        spellInput, spellInputF, genderPick, spellRevealed, subStage,
         savedAt: Date.now()
       };
       localStorage.setItem(SPELL_SESSION_KEY, JSON.stringify(data));
     } catch {}
-  }, [queue, idx, pendingCardRetry, loading, done, wordIds, config, spellInput, genderPick, spellRevealed, subStage]);
+  }, [queue, idx, pendingCardRetry, loading, done, wordIds, config, spellInput, spellInputF, genderPick, spellRevealed, subStage]);
   useEffect(() => {
     if (restoringRef.current) return; // 恢复 session 时不清状态
     resetSpellState();
@@ -241,6 +250,11 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     setPendingCardRetry(false);
     // 如果当前 item 是 retry，直接进 sub stage，不走拼写
     const item = queue[idx];
+    // 名词阴阳双格重做：上一轮对的格子直接预填正确答案 + 锁住
+    if (item?.kind === 'card' && item.partialDone && item.card.lemma_feminine) {
+      if (item.partialDone.m) setSpellInput(item.card.surface || item.card.lemma);
+      if (item.partialDone.f) setSpellInputF(item.card.lemma_feminine);
+    }
     if (item?.kind === 'retry') {
       setSubStage({
         type: item.subType,
@@ -283,15 +297,20 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   // Enter 键全局推进；同时实现"在拼写阶段，无论焦点在哪，打字直接进 spell input"
   const enterHandlerRef = useRef<(() => void) | null>(null);
   const spellInputRef = useRef<HTMLInputElement | null>(null);
+  const spellInputFRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       // textarea 不拦截
       if (target?.tagName === 'TEXTAREA') return;
+      // 焦点在文本输入框上时不抢键（避免吃掉阴性格的输入）；
+      // radio / checkbox 不算文本框，仍然要让重定向生效（这样 Tab 到 radio 后按空格能跳到拼写框）
+      const inText = target instanceof HTMLInputElement &&
+        !['radio', 'checkbox', 'button', 'submit', 'reset'].includes(target.type);
 
       // ── 拼写阶段且未揭示：可打印字符 / Backspace 自动重定向到 spell input ──
       if (
-        !subStage && !spellRevealed &&
+        !subStage && !spellRevealed && !inText &&
         spellInputRef.current && document.activeElement !== spellInputRef.current
       ) {
         const isPrintable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -307,6 +326,17 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
       // ── Enter 全局推进 ──
       if (e.key === 'Enter') {
+        // 拼写阶段、未揭示、当前确实有阴性格（DOM 中存在该 input）、焦点在阳性格 → Enter 跳到阴性格而不是提交
+        // 只看 ref 不够（ref 可能是上一张有阴性的卡留下的，已经从 DOM 卸载）→ 还要 isConnected 校验
+        const fEl = spellInputFRef.current;
+        if (
+          !subStage && !spellRevealed && fEl && fEl.isConnected &&
+          document.activeElement === spellInputRef.current
+        ) {
+          e.preventDefault();
+          fEl.focus();
+          return;
+        }
         const fn = enterHandlerRef.current;
         if (fn) {
           e.preventDefault();
@@ -333,19 +363,33 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   // 动词考原型 lemma；其它词考 surface（用户输入的形式 = 单数 / 阳性）
   const expectedSpell = card.pos === 'verb' ? card.lemma : (card.surface || card.lemma);
+  /** 名词且存在阴性同源词 → 不考 gender radio，改成同时考阳性 + 阴性两格 */
+  const hasFeminine = card.pos === 'noun' && !!card.lemma_feminine;
+  const expectedSpellF = hasFeminine ? (card.lemma_feminine ?? '') : '';
+  // 名词重做时上一轮对的格子锁定
+  const partialDone = currentItem?.kind === 'card' ? currentItem.partialDone : undefined;
+  const lockedM = !!(hasFeminine && partialDone?.m);
+  const lockedF = !!(hasFeminine && partialDone?.f);
 
   // ───────── 阶段 1: 拼写 ─────────
 
   const submitSpell = () => {
-    if (card.pos === 'noun' && card.gender && !genderPick) {
+    if (card.pos === 'noun' && card.gender && !hasFeminine && !genderPick) {
       alert('请先选择阴阳性 (le / la)');
       return;
     }
     const spellOk = fold(spellInput) === fold(expectedSpell);
-    const genderOk = !card.gender || genderPick === card.gender;
+    const spellFOk = !hasFeminine || fold(spellInputF) === fold(expectedSpellF);
+    const genderOk = !card.gender || hasFeminine || genderPick === card.gender;
+    let expectedDisplay: string;
+    if (hasFeminine) {
+      expectedDisplay = `${expectedSpell} / ${expectedSpellF}`;
+    } else {
+      expectedDisplay = expectedSpell + (card.gender ? ` [${card.gender}]` : '');
+    }
     setSpellRevealed({
-      correct: spellOk && genderOk,
-      expected: expectedSpell + (card.gender ? ` [${card.gender}]` : '')
+      correct: spellOk && spellFOk && genderOk,
+      expected: expectedDisplay
     });
     setRevealLockUntil(Date.now() + 800);
   };
@@ -354,7 +398,14 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     // 拼写错的整张卡压回末尾（重新走拼写）；保留 spellOnly 标记，避免再次跑已经做过的子练习
     if (!spellCorrect && card) {
       const wasSpellOnly = currentItem?.kind === 'card' && currentItem.spellOnly;
-      setQueue(q => [...q, { kind: 'card', card, spellOnly: wasSpellOnly || undefined }]);
+      // 名词阴阳双格：把已对的格子标记下来，重做时锁定免填
+      let nextPartial: { m?: boolean; f?: boolean } | undefined = undefined;
+      if (hasFeminine) {
+        const mWasOk = lockedM || fold(spellInput) === fold(expectedSpell);
+        const fWasOk = lockedF || fold(spellInputF) === fold(expectedSpellF);
+        if (mWasOk || fWasOk) nextPartial = { m: mWasOk || undefined, f: fWasOk || undefined };
+      }
+      setQueue(q => [...q, { kind: 'card', card, spellOnly: wasSpellOnly || undefined, partialDone: nextPartial }]);
     }
     const newQueueLen = queue.length + (spellCorrect ? 0 : 1);
     if (idx + 1 >= newQueueLen) setDone(true);
@@ -389,8 +440,15 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   };
 
   const writeSpellLog = async (correct: boolean) => {
-    const expected = expectedSpell + (card.gender ? ` [${card.gender}]` : '');
-    const userInput = spellInput.trim() + (genderPick ? ` [${genderPick}]` : '');
+    let expected: string;
+    let userInput: string;
+    if (hasFeminine) {
+      expected = `阳:${expectedSpell} 阴:${expectedSpellF}`;
+      userInput = `阳:${spellInput.trim()} 阴:${spellInputF.trim()}`;
+    } else {
+      expected = expectedSpell + (card.gender ? ` [${card.gender}]` : '');
+      userInput = spellInput.trim() + (genderPick ? ` [${genderPick}]` : '');
+    }
     await window.api.review.submit({
       word_id: card.id,
       mode: 'spell',
@@ -742,7 +800,7 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
         {card.translation_en && <span>en: {card.translation_en}</span>}
       </div>
 
-      {card.pos === 'noun' && card.gender && (
+      {card.pos === 'noun' && card.gender && !hasFeminine && (
         <div className="row" style={{ gap: 16 }}>
           {(['m', 'f'] as const).map(g => {
             const picked = genderPick === g;
@@ -797,17 +855,18 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
       <div className="row">
         <div style={{ flex: 1 }}>
-          <label>请输入法语单词</label>
+          <label>{hasFeminine ? `阳性 (le)${lockedM ? ' ✓ 已答对' : ''}` : '请输入法语单词'}</label>
           <AccentInput
             inputRef={spellInputRef}
             value={spellInput}
             onChange={setSpellInput}
-            disabled={!!spellRevealed}
+            disabled={!!spellRevealed || lockedM}
             placeholder="…"
             tabIndex={-1}
+            autoFocus={hasFeminine && !lockedM}
             onKeyDown={(e) => {
-              // 在 input 里按 Tab 也跳到 radio
-              if (e.key === 'Tab' && card.pos === 'noun' && card.gender && !spellRevealed) {
+              // 在 input 里按 Tab 也跳到 radio（无阴阳同源词的名词）
+              if (e.key === 'Tab' && card.pos === 'noun' && card.gender && !hasFeminine && !spellRevealed) {
                 e.preventDefault();
                 const target = e.shiftKey ? 'f' : 'm';
                 setGenderPick(target);
@@ -822,9 +881,28 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
               background: fold(spellInput) === fold(expectedSpell) ? '#e8f7ee' : '#fdecea',
               color: fold(spellInput) === fold(expectedSpell) ? '#1e7c3a' : '#b1261e',
               borderColor: fold(spellInput) === fold(expectedSpell) ? '#1e7c3a' : '#b1261e'
-            } : undefined}
+            } : (lockedM ? { background: '#e8f7ee', color: '#1e7c3a' } : undefined)}
           />
         </div>
+        {hasFeminine && (
+          <div style={{ flex: 1 }}>
+            <label>阴性 (la){lockedF ? ' ✓ 已答对' : ''}</label>
+            <AccentInput
+              inputRef={spellInputFRef}
+              value={spellInputF}
+              onChange={setSpellInputF}
+              disabled={!!spellRevealed || lockedF}
+              placeholder="…"
+              tabIndex={-1}
+              autoFocus={lockedM && !lockedF}
+              style={spellRevealed ? {
+                background: fold(spellInputF) === fold(expectedSpellF) ? '#e8f7ee' : '#fdecea',
+                color: fold(spellInputF) === fold(expectedSpellF) ? '#1e7c3a' : '#b1261e',
+                borderColor: fold(spellInputF) === fold(expectedSpellF) ? '#1e7c3a' : '#b1261e'
+              } : (lockedF ? { background: '#e8f7ee', color: '#1e7c3a' } : undefined)}
+            />
+          </div>
+        )}
       </div>
 
       {!spellRevealed ? (
@@ -840,6 +918,16 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
             padding: 12, borderRadius: 8, marginTop: 12
           }}>
             <strong>{spellRevealed.correct ? '✓ 正确' : '✗ 答案：' + spellRevealed.expected}</strong>
+            {card.pos === 'noun' && card.lemma_plural && (
+              <div style={{ fontSize: 13, marginTop: 6, opacity: 0.85 }}>
+                复数: {card.gender ? 'les ' : ''}{card.lemma_plural}
+              </div>
+            )}
+            {card.pos === 'noun' && !hasFeminine && card.lemma_feminine && (
+              <div style={{ fontSize: 13, marginTop: 6, opacity: 0.85 }}>
+                阴性: la {card.lemma_feminine}
+              </div>
+            )}
           </div>
           <div className="row" style={{ marginTop: 12 }}>
             <button onClick={onSpellNext} disabled={lockMs > 0} tabIndex={-1}>

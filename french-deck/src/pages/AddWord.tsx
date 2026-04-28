@@ -9,6 +9,8 @@ interface LookupResult {
   translation_en: string | null;
   source: string;
   impersonal?: boolean;
+  pluralSurface?: string | null;
+  feminineSurface?: string | null;
 }
 
 export default function AddWord() {
@@ -20,6 +22,8 @@ export default function AddWord() {
   const [en, setEn] = useState('');
   const [example, setExample] = useState('');
   const [impersonal, setImpersonal] = useState(false);
+  const [lemmaPlural, setLemmaPlural] = useState('');
+  const [lemmaFeminine, setLemmaFeminine] = useState('');
   // 形容词 5 种 form：阳单/阴单/阳复/阴复/元音前阳单。空字符串 = 该格未填。
   type AdjFormKind = 'm_sg' | 'f_sg' | 'm_pl' | 'f_pl' | 'm_sg_vowel';
   const ADJ_FORM_ORDER: { kind: AdjFormKind; label: string }[] = [
@@ -41,8 +45,8 @@ export default function AddWord() {
   // 重复 lemma 时显示的内嵌确认框
   const [duplicateAsk, setDuplicateAsk] = useState<{ lemma: string; payload: any } | null>(null);
   // 记录哪些字段是自动填的（vs 用户手动改的），便于查询新词时覆盖
-  const [autoFilled, setAutoFilled] = useState<{ lemma: boolean; pos: boolean; gender: boolean; en: boolean; impersonal: boolean }>({
-    lemma: false, pos: false, gender: false, en: false, impersonal: false
+  const [autoFilled, setAutoFilled] = useState<{ lemma: boolean; pos: boolean; gender: boolean; en: boolean; impersonal: boolean; lemma_plural: boolean; lemma_feminine: boolean }>({
+    lemma: false, pos: false, gender: false, en: false, impersonal: false, lemma_plural: false, lemma_feminine: false
   });
 
   const debounceRef = useRef<number | null>(null);
@@ -59,7 +63,9 @@ export default function AddWord() {
       if (autoFilled.gender) setGender('');
       if (autoFilled.en) setEn('');
       if (autoFilled.impersonal) setImpersonal(false);
-      setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
+      if (autoFilled.lemma_plural) setLemmaPlural('');
+      if (autoFilled.lemma_feminine) setLemmaFeminine('');
+      setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false, lemma_plural: false, lemma_feminine: false });
       return;
     }
     debounceRef.current = window.setTimeout(async () => {
@@ -74,10 +80,12 @@ export default function AddWord() {
           if (autoFilled.gender) setGender('');
           if (autoFilled.en) setEn('');
           if (autoFilled.impersonal) setImpersonal(false);
-          setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
+          if (autoFilled.lemma_plural) setLemmaPlural('');
+          if (autoFilled.lemma_feminine) setLemmaFeminine('');
+          setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false, lemma_plural: false, lemma_feminine: false });
           return;
         }
-        setHint(`来源: ${r.source}${r.impersonal ? ' · 非人称动词 (只考 il)' : ''}`);
+        setHint(`来源: ${r.source}${r.impersonal ? ' · 非人称动词 (只考 il)' : ''}${r.pluralSurface ? ` · 不规则复数: ${r.pluralSurface}` : ''}${r.feminineSurface ? ` · 阴性: ${r.feminineSurface}` : ''}`);
         // 只要字段是空 或 之前是自动填的，就用新结果覆盖；用户手动改过的不覆盖
         const next = { ...autoFilled };
         if ((!lemma || autoFilled.lemma) && r.lemma) { setLemma(r.lemma); next.lemma = true; }
@@ -89,6 +97,15 @@ export default function AddWord() {
         if (autoFilled.impersonal || !impersonal) {
           setImpersonal(!!r.impersonal);
           next.impersonal = !!r.impersonal;
+        }
+        // 名词不规则复数：lookup 才给非空（规则的返回 null）；用户没手动改过 → 用 lookup 覆盖
+        if (autoFilled.lemma_plural || !lemmaPlural) {
+          setLemmaPlural(r.pluralSurface ?? '');
+          next.lemma_plural = !!r.pluralSurface;
+        }
+        if (autoFilled.lemma_feminine || !lemmaFeminine) {
+          setLemmaFeminine(r.feminineSurface ?? '');
+          next.lemma_feminine = !!r.feminineSurface;
         }
         setAutoFilled(next);
       } catch (err) {
@@ -104,6 +121,8 @@ export default function AddWord() {
   const setGenderManual = (v: 'm' | 'f' | '') => { setGender(v); setAutoFilled(a => ({ ...a, gender: false })); };
   const setEnManual = (v: string) => { setEn(v); setAutoFilled(a => ({ ...a, en: false })); };
   const setImpersonalManual = (v: boolean) => { setImpersonal(v); setAutoFilled(a => ({ ...a, impersonal: false })); };
+  const setLemmaPluralManual = (v: string) => { setLemmaPlural(v); setAutoFilled(a => ({ ...a, lemma_plural: false })); };
+  const setLemmaFeminineManual = (v: string) => { setLemmaFeminine(v); setAutoFilled(a => ({ ...a, lemma_feminine: false })); };
   const setAdjFormManual = (kind: AdjFormKind, v: string) => {
     setAdjForms(s => ({ ...s, [kind]: v }));
     setAdjAutoFilled(s => ({ ...s, [kind]: false }));
@@ -152,7 +171,9 @@ export default function AddWord() {
   const reset = () => {
     setSurface(''); setLemma(''); setPos(''); setGender('');
     setZh(''); setEn(''); setExample(''); setHint(''); setImpersonal(false);
-    setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
+    setLemmaPlural('');
+    setLemmaFeminine('');
+    setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false, lemma_plural: false, lemma_feminine: false });
     setAdjForms({ m_sg: '', f_sg: '', m_pl: '', f_pl: '', m_sg_vowel: '' });
     setAdjAutoFilled({ m_sg: false, f_sg: false, m_pl: false, f_pl: false, m_sg_vowel: false });
   };
@@ -173,6 +194,8 @@ export default function AddWord() {
       translation_en: en.trim() || null,
       example_fr: example.trim() || null,
       impersonal: (pos.trim() === 'verb' && impersonal) ? 1 : 0,
+      lemma_plural: (pos.trim() === 'noun' && lemmaPlural.trim()) ? lemmaPlural.trim().toLowerCase() : null,
+      lemma_feminine: (pos.trim() === 'noun' && lemmaFeminine.trim()) ? lemmaFeminine.trim().toLowerCase() : null,
       adjForms: pos.trim() === 'adj'
         ? (Object.keys(adjForms) as AdjFormKind[])
             .filter(k => adjForms[k].trim())
@@ -304,6 +327,27 @@ export default function AddWord() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {pos === 'noun' && (
+        <div className="row">
+          <div style={{ flex: 1 }}>
+            <label>不规则复数 (留空 = 规则的 +s/+x)</label>
+            <AccentInput
+              value={lemmaPlural}
+              onChange={setLemmaPluralManual}
+              placeholder="例如 cheval → chevaux；chat 留空"
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>阴性形式 (无对应阴性词留空)</label>
+            <AccentInput
+              value={lemmaFeminine}
+              onChange={setLemmaFeminineManual}
+              placeholder="例�� chat → chatte；table 留空"
+            />
+          </div>
         </div>
       )}
 

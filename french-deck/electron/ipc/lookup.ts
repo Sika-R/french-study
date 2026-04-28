@@ -11,6 +11,92 @@ export interface LookupResult {
   translation_en: string | null;
   source: 'lexique' | 'wiktionary' | 'cache' | 'none';
   impersonal?: boolean;
+  /** 名词不规则复数：仅当 plural 不是 lemma+'s' 等规则形时填，否则 null */
+  pluralSurface?: string | null;
+  /** 名词阴性同源词（chat→chatte, acteur→actrice）。lemma 自身就是阴性时返回 null。 */
+  feminineSurface?: string | null;
+}
+
+/**
+ * 给定 noun lemma（通常是阳性），尝试找它的阴性同源词（chat→chatte, acteur→actrice...）。
+ * 法语名词阴性化规则较多；我们生成候选 surface，再去 Lexique 校验是否真的存在 (pos=noun, gender=f, number=s)。
+ * 找不到就返回 null（许多名词只有单一性别，那种 lemma 自身就是 f，不需要 feminine 变形）。
+ */
+function feminineNoun(lemma: string): string | null {
+  const l = lemma.toLowerCase();
+
+  // 如果 lemma 本身在 Lexique 里就是阴性 → 没有「阴性同源词」一说
+  const selfEntries = lexique.entriesByLemma(l).filter(e => e.pos === 'noun');
+  if (selfEntries.length > 0 && selfEntries.every(e => e.gender === 'f')) return null;
+
+  // 候选构造
+  const candidates: string[] = [];
+  const last = l.slice(-1);
+  const last2 = l.slice(-2);
+  const last3 = l.slice(-3);
+
+  // 一些显式后缀变换
+  if (last3 === 'eur') {
+    // acteur → actrice / vendeur → vendeuse / chanteur → chanteuse
+    candidates.push(l.slice(0, -3) + 'rice');
+    candidates.push(l.slice(0, -3) + 'euse');
+  }
+  if (last2 === 'er') {
+    // boulanger → boulangère
+    candidates.push(l.slice(0, -2) + 'ère');
+  }
+  if (last2 === 'en') {
+    // citoyen → citoyenne
+    candidates.push(l + 'ne');
+  }
+  if (last2 === 'on') {
+    // lion → lionne
+    candidates.push(l + 'ne');
+  }
+  if (last === 'f') {
+    // veuf → veuve
+    candidates.push(l.slice(0, -1) + 've');
+  }
+  if (last === 'x') {
+    // époux → épouse
+    candidates.push(l.slice(0, -1) + 'se');
+  }
+  if (last === 't' || last === 'n' || last === 'l') {
+    // chat → chatte / chien → chienne / colonel → colonelle
+    candidates.push(l + last + 'e');
+  }
+
+  // 通用兜底：直接 +e（étudiant → étudiante, ami → amie）
+  if (last !== 'e') candidates.push(l + 'e');
+
+  // 去重，逐个 check
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    if (seen.has(c)) continue;
+    seen.add(c);
+    if (c === l) continue; // 候选与 lemma 相同 → 跳过
+    // 用 surface 索引验证候选确实是个法语阴性名词（lemma 可能跟 masc 共享，所以不能 entriesByLemma）
+    const ent = lexique.lookup(c);
+    if (ent && ent.pos === 'noun' && ent.gender === 'f') return c;
+  }
+  return null;
+}
+
+/**
+ * 给定 noun lemma，从 Lexique 找它的复数形；仅当确实「不规则」时返回。
+ * 规则的（+s, -au/-eu/-eau+x, 不变化）一律返回 null，不打扰用户。
+ */
+function irregularNounPlural(lemma: string): string | null {
+  const l = lemma.toLowerCase();
+  const all = lexique.entriesByLemma(l).filter(e => e.pos === 'noun' && e.number === 'p');
+  if (all.length === 0) return null;
+  all.sort((a, b) => b.freq - a.freq);
+  const plural = all[0].surface.toLowerCase();
+  if (plural === l) return null;                    // prix, fils
+  if (plural === l + 's') return null;              // chat → chats
+  if (/(au|eu|eau)$/.test(l) && plural === l + 'x') return null; // gâteau → gâteaux
+  // -al → -aux 是不规则的常见形式，会落进来
+  return all[0].surface;
 }
 
 /**
@@ -113,7 +199,9 @@ export function registerLookupHandlers(): void {
         gender,
         translation_en: wkt?.translation_en ?? null,
         source: 'lexique',
-        impersonal: lex.pos === 'verb' ? isImpersonalVerb(lemma) : false
+        impersonal: lex.pos === 'verb' ? isImpersonalVerb(lemma) : false,
+        pluralSurface: lex.pos === 'noun' ? irregularNounPlural(lemma) : null,
+        feminineSurface: lex.pos === 'noun' ? feminineNoun(lemma) : null
       };
     }
 
@@ -127,7 +215,9 @@ export function registerLookupHandlers(): void {
         gender: wkt.gender ?? null,
         translation_en: wkt.translation_en ?? null,
         source: wkt.source,
-        impersonal: wkt.pos === 'verb' ? isImpersonalVerb(lemma) : false
+        impersonal: wkt.pos === 'verb' ? isImpersonalVerb(lemma) : false,
+        pluralSurface: wkt.pos === 'noun' ? irregularNounPlural(lemma) : null,
+        feminineSurface: wkt.pos === 'noun' ? feminineNoun(lemma) : null
       };
     }
     return { surface: s, lemma: null, pos: null, gender: null, translation_en: null, source: 'none' };

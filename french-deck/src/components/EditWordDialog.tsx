@@ -11,6 +11,8 @@ export interface EditableWord {
   translation_en: string | null;
   example_fr: string | null;
   impersonal?: number | null;
+  lemma_plural?: string | null;
+  lemma_feminine?: string | null;
 }
 
 type AdjFormKind = 'm_sg' | 'f_sg' | 'm_pl' | 'f_pl' | 'm_sg_vowel';
@@ -37,6 +39,8 @@ export default function EditWordDialog({ word, initialAdjForms, onClose, onSaved
   const [en, setEn] = useState(word.translation_en ?? '');
   const [example, setExample] = useState(word.example_fr ?? '');
   const [impersonal, setImpersonal] = useState<boolean>(!!word.impersonal);
+  const [lemmaPlural, setLemmaPlural] = useState<string>(word.lemma_plural ?? '');
+  const [lemmaFeminine, setLemmaFeminine] = useState<string>(word.lemma_feminine ?? '');
   const [adjForms, setAdjForms] = useState<Record<AdjFormKind, string>>({
     m_sg: initialAdjForms?.m_sg ?? '',
     f_sg: initialAdjForms?.f_sg ?? '',
@@ -65,7 +69,9 @@ export default function EditWordDialog({ word, initialAdjForms, onClose, onSaved
         translation_zh: zh.trim() || null,
         translation_en: en.trim() || null,
         example_fr: example.trim() || null,
-        impersonal: (pos === 'verb' && impersonal) ? 1 : 0
+        impersonal: (pos === 'verb' && impersonal) ? 1 : 0,
+        lemma_plural: (pos === 'noun' && lemmaPlural.trim()) ? lemmaPlural.trim().toLowerCase() : null,
+        lemma_feminine: (pos === 'noun' && lemmaFeminine.trim()) ? lemmaFeminine.trim().toLowerCase() : null
       };
       // 形容词：整组替换（清空所有 form 也是合法操作）
       if (pos === 'adj') {
@@ -177,6 +183,27 @@ export default function EditWordDialog({ word, initialAdjForms, onClose, onSaved
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {pos === 'noun' && (
+          <div className="row">
+            <div style={{ flex: 1 }}>
+              <label>不规则复数 (留空 = 规则的 +s/+x)</label>
+              <AccentInput
+                value={lemmaPlural}
+                onChange={setLemmaPlural}
+                placeholder="例如 cheval → chevaux；chat 留空"
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>阴性形式 (无对应阴性词留空)</label>
+              <AccentInput
+                value={lemmaFeminine}
+                onChange={setLemmaFeminine}
+                placeholder="例如 chat → chatte；table 留空"
+              />
+            </div>
           </div>
         )}
 

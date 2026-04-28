@@ -146,6 +146,16 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
       );
       CREATE INDEX IF NOT EXISTS idx_adj_forms_word ON adj_forms(word_id);
     `);
+  },
+
+  // ────────── v7 → v8: words 加 lemma_plural（不规则名词复数） ──────────
+  (db) => {
+    addColumnIfMissing(db, 'words', 'lemma_plural', 'TEXT');
+  },
+
+  // ────────── v8 → v9: words 加 lemma_feminine（名词阴性同源词） ──────────
+  (db) => {
+    addColumnIfMissing(db, 'words', 'lemma_feminine', 'TEXT');
   }
 
   // 以后加新 schema 在下面 push 新函数即可，不要修改已有的。

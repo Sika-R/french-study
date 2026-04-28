@@ -10,10 +10,18 @@ export interface VerbCard {
   lemma: string;
   translation_zh: string | null;
   translation_en: string | null;
+  impersonal?: number | null;
 }
 
 function fold(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+}
+
+/** 给定时态的人称列表，按 word.impersonal 过滤为只剩 il (3)。无人称时态（分词等）保持不变。 */
+function effectivePersons(persons: number[], impersonal: boolean | number | null | undefined): number[] {
+  if (!impersonal) return persons;
+  if (persons.length === 0) return persons; // 分词等无人称时态不受影响
+  return persons.filter(p => p === 3);
 }
 
 export function registerPracticeHandlers(): void {
@@ -24,7 +32,7 @@ export function registerPracticeHandlers(): void {
   ipcMain.handle('practice:verbs', () => {
     const db = getDb();
     const rows = db.prepare(`
-      SELECT id, lemma, translation_zh, translation_en
+      SELECT id, lemma, translation_zh, translation_en, impersonal
       FROM words WHERE pos = 'verb' ORDER BY lemma ASC
     `).all() as VerbCard[];
     return rows.filter(r => verbiste.getInfinitive(r.lemma) !== null);
@@ -34,7 +42,13 @@ export function registerPracticeHandlers(): void {
   ipcMain.handle('practice:conjugationTable', (_e, infinitive: string, tenseId: string) => {
     const t = tenseById(tenseId);
     if (!t) return null;
-    const persons = t.persons.length > 0 ? t.persons : [0]; // 0 = 无人称
+    // 看一下这个词是不是非人称（仅 verb 表里有这个标记）
+    const db = getDb();
+    const w = db.prepare(`SELECT impersonal FROM words WHERE lemma = ? AND pos = 'verb'`)
+      .get(infinitive) as { impersonal: number | null } | undefined;
+    const isImpersonal = !!(w?.impersonal);
+    const persons = effectivePersons(t.persons.length > 0 ? t.persons : [0], isImpersonal);
+    if (persons.length === 0) return []; // 非人称 + 分词时态：直接空（也没意义）
     const out: { person: number; expected: string | null }[] = [];
     for (const p of persons) {
       if (p === 0) {
@@ -68,7 +82,9 @@ export function registerPracticeHandlers(): void {
       console.warn(`[practice:submitTable] skip log for missing word_id=${args.word_id}`);
       return [];
     }
-    const persons = t.persons.length > 0 ? t.persons : [0];
+    const wordRow = db.prepare(`SELECT impersonal FROM words WHERE id = ?`)
+      .get(args.word_id) as { impersonal: number | null } | undefined;
+    const persons = effectivePersons(t.persons.length > 0 ? t.persons : [0], !!wordRow?.impersonal);
 
     const insertLog = db.prepare(`
       INSERT INTO review_logs (word_id, reviewed_at, rating, mode, correct, user_input, expected, tense_id, person)
@@ -163,14 +179,15 @@ export function registerPracticeHandlers(): void {
     if (opts.word_ids.length === 0 || opts.tense_ids.length === 0) return null;
     const db = getDb();
     const wid = opts.word_ids[Math.floor(Math.random() * opts.word_ids.length)];
-    const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+    const word = db.prepare('SELECT id, lemma, translation_zh, translation_en, impersonal FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
     if (!word) return null;
 
     const tid = opts.tense_ids[Math.floor(Math.random() * opts.tense_ids.length)];
     const t = tenseById(tid);
     if (!t) return null;
 
-    const persons = t.persons.length > 0 ? t.persons : [0];
+    const persons = effectivePersons(t.persons.length > 0 ? t.persons : [0], !!word.impersonal);
+    if (persons.length === 0) return null;
     // 多次尝试：避免该动词该时态此人称在 Verbiste 中没有变位
     for (let i = 0; i < 6; i++) {
       const p = persons[Math.floor(Math.random() * persons.length)];
@@ -202,14 +219,15 @@ export function registerPracticeHandlers(): void {
     // 外层重试：避免某个 (verb, tense) 在 Verbiste 中无任何有效变位时直接返回 null
     for (let attempt = 0; attempt < 30; attempt++) {
       const wid = opts.word_ids[Math.floor(Math.random() * opts.word_ids.length)];
-      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en, impersonal FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
       if (!word) continue;
 
       const tid = opts.tense_ids[Math.floor(Math.random() * opts.tense_ids.length)];
       const t = tenseById(tid);
       if (!t) continue;
 
-      const persons = t.persons.length > 0 ? t.persons : [0];
+      const persons = effectivePersons(t.persons.length > 0 ? t.persons : [0], !!word.impersonal);
+      if (persons.length === 0) continue;
 
       // 收集该 (word, tense) 下所有有效人称的变位
       const valid: { person: number; conjugated: string }[] = [];
@@ -255,12 +273,13 @@ export function registerPracticeHandlers(): void {
     }> = [];
 
     for (const wid of opts.word_ids) {
-      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en, impersonal FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
       if (!word) continue;
       for (const tid of opts.tense_ids) {
         const t = tenseById(tid);
         if (!t) continue;
-        const persons = t.persons.length > 0 ? t.persons : [0];
+        const persons = effectivePersons(t.persons.length > 0 ? t.persons : [0], !!word.impersonal);
+        if (persons.length === 0) continue;
         const valid: { person: number; conjugated: string }[] = [];
         for (const pp of persons) {
           const sp = pp === 0 ? 1 : pp;
@@ -299,12 +318,13 @@ export function registerPracticeHandlers(): void {
       expected: string;
     }> = [];
     for (const wid of opts.word_ids) {
-      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
+      const word = db.prepare('SELECT id, lemma, translation_zh, translation_en, impersonal FROM words WHERE id = ?').get(wid) as VerbCard | undefined;
       if (!word) continue;
       for (const tid of opts.tense_ids) {
         const t = tenseById(tid);
         if (!t) continue;
-        const persons = t.persons.length > 0 ? t.persons : [0];
+        const persons = effectivePersons(t.persons.length > 0 ? t.persons : [0], !!word.impersonal);
+        if (persons.length === 0) continue;
         for (const pp of persons) {
           const sp = pp === 0 ? 1 : pp;
           const v = verbiste.conjugate(word.lemma, t.mode, t.tense, sp);

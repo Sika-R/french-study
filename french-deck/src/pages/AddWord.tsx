@@ -8,6 +8,7 @@ interface LookupResult {
   gender: 'm' | 'f' | null;
   translation_en: string | null;
   source: string;
+  impersonal?: boolean;
 }
 
 export default function AddWord() {
@@ -18,14 +19,15 @@ export default function AddWord() {
   const [zh, setZh] = useState('');
   const [en, setEn] = useState('');
   const [example, setExample] = useState('');
+  const [impersonal, setImpersonal] = useState(false);
   const [hint, setHint] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string>('');
   // 重复 lemma 时显示的内嵌确认框
   const [duplicateAsk, setDuplicateAsk] = useState<{ lemma: string; payload: any } | null>(null);
   // 记录哪些字段是自动填的（vs 用户手动改的），便于查询新词时覆盖
-  const [autoFilled, setAutoFilled] = useState<{ lemma: boolean; pos: boolean; gender: boolean; en: boolean }>({
-    lemma: false, pos: false, gender: false, en: false
+  const [autoFilled, setAutoFilled] = useState<{ lemma: boolean; pos: boolean; gender: boolean; en: boolean; impersonal: boolean }>({
+    lemma: false, pos: false, gender: false, en: false, impersonal: false
   });
 
   const debounceRef = useRef<number | null>(null);
@@ -41,7 +43,8 @@ export default function AddWord() {
       if (autoFilled.pos) setPos('');
       if (autoFilled.gender) setGender('');
       if (autoFilled.en) setEn('');
-      setAutoFilled({ lemma: false, pos: false, gender: false, en: false });
+      if (autoFilled.impersonal) setImpersonal(false);
+      setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
       return;
     }
     debounceRef.current = window.setTimeout(async () => {
@@ -55,10 +58,11 @@ export default function AddWord() {
           if (autoFilled.pos) setPos('');
           if (autoFilled.gender) setGender('');
           if (autoFilled.en) setEn('');
-          setAutoFilled({ lemma: false, pos: false, gender: false, en: false });
+          if (autoFilled.impersonal) setImpersonal(false);
+          setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
           return;
         }
-        setHint(`来源: ${r.source}`);
+        setHint(`来源: ${r.source}${r.impersonal ? ' · 非人称动词 (只考 il)' : ''}`);
         // 只要字段是空 或 之前是自动填的，就用新结果覆盖；用户手动改过的不覆盖
         const next = { ...autoFilled };
         if ((!lemma || autoFilled.lemma) && r.lemma) { setLemma(r.lemma); next.lemma = true; }
@@ -66,6 +70,11 @@ export default function AddWord() {
         if ((!gender || autoFilled.gender) && r.gender) { setGender(r.gender); next.gender = true; }
         else if (autoFilled.gender && !r.gender) { setGender(''); next.gender = false; }
         if ((!en || autoFilled.en) && r.translation_en) { setEn(r.translation_en); next.en = true; }
+        // 非人称：还没手动改过 → 用词典建议覆盖（含 false → 取消之前自动勾的）
+        if (autoFilled.impersonal || !impersonal) {
+          setImpersonal(!!r.impersonal);
+          next.impersonal = !!r.impersonal;
+        }
         setAutoFilled(next);
       } catch (err) {
         setHint('查询出错: ' + (err as Error).message);
@@ -79,11 +88,12 @@ export default function AddWord() {
   const setPosManual = (v: string) => { setPos(v); setAutoFilled(a => ({ ...a, pos: false })); };
   const setGenderManual = (v: 'm' | 'f' | '') => { setGender(v); setAutoFilled(a => ({ ...a, gender: false })); };
   const setEnManual = (v: string) => { setEn(v); setAutoFilled(a => ({ ...a, en: false })); };
+  const setImpersonalManual = (v: boolean) => { setImpersonal(v); setAutoFilled(a => ({ ...a, impersonal: false })); };
 
   const reset = () => {
     setSurface(''); setLemma(''); setPos(''); setGender('');
-    setZh(''); setEn(''); setExample(''); setHint('');
-    setAutoFilled({ lemma: false, pos: false, gender: false, en: false });
+    setZh(''); setEn(''); setExample(''); setHint(''); setImpersonal(false);
+    setAutoFilled({ lemma: false, pos: false, gender: false, en: false, impersonal: false });
   };
 
   const save = async () => {
@@ -100,7 +110,8 @@ export default function AddWord() {
       gender: gender || null,
       translation_zh: zh.trim() || null,
       translation_en: en.trim() || null,
-      example_fr: example.trim() || null
+      example_fr: example.trim() || null,
+      impersonal: (pos.trim() === 'verb' && impersonal) ? 1 : 0
     };
 
     try {
@@ -206,6 +217,19 @@ export default function AddWord() {
           <textarea value={example} onChange={e => setExample(e.target.value)} rows={2} />
         </div>
       </div>
+
+      {pos === 'verb' && (
+        <div className="row">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={impersonal}
+              onChange={e => setImpersonalManual(e.target.checked)}
+            />
+            <span>非人称动词（只考 il 形式，比如 pleuvoir / falloir）</span>
+          </label>
+        </div>
+      )}
 
       <div className="row">
         <button onClick={save} disabled={saving}>{saving ? '保存中…' : '保存'}</button>

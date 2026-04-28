@@ -9,6 +9,7 @@ export interface EditableWord {
   translation_zh: string | null;
   translation_en: string | null;
   example_fr: string | null;
+  impersonal?: number | null;
 }
 
 interface Props {
@@ -23,6 +24,7 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
   const [zh, setZh] = useState(word.translation_zh ?? '');
   const [en, setEn] = useState(word.translation_en ?? '');
   const [example, setExample] = useState(word.example_fr ?? '');
+  const [impersonal, setImpersonal] = useState<boolean>(!!word.impersonal);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,7 +45,8 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
         gender: pos === 'noun' ? (gender || null) : null,
         translation_zh: zh.trim() || null,
         translation_en: en.trim() || null,
-        example_fr: example.trim() || null
+        example_fr: example.trim() || null,
+        impersonal: (pos === 'verb' && impersonal) ? 1 : 0
       };
       await window.api.words.update(word.id, patch);
       onSaved();
@@ -125,6 +128,19 @@ export default function EditWordDialog({ word, onClose, onSaved }: Props) {
             <textarea value={example} onChange={e => setExample(e.target.value)} rows={3} />
           </div>
         </div>
+
+        {pos === 'verb' && (
+          <div className="row">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={impersonal}
+                onChange={e => setImpersonal(e.target.checked)}
+              />
+              <span>非人称动词（只考 il 形式）</span>
+            </label>
+          </div>
+        )}
 
         {error && (
           <div style={{ color: '#b1261e', fontSize: 13, marginBottom: 8 }}>保存失败：{error}</div>

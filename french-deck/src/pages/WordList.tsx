@@ -11,6 +11,7 @@ interface WordRow {
   translation_en: string | null;
   example_fr: string | null;
   notes: string | null;
+  impersonal: number | null;
   created_at: number;
 }
 

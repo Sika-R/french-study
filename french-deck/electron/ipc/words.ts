@@ -12,6 +12,7 @@ export interface WordInput {
   translation_en?: string | null;
   example_fr?: string | null;
   notes?: string | null;
+  impersonal?: 0 | 1;
 }
 
 export interface WordRow extends WordInput {
@@ -38,8 +39,8 @@ export function registerWordHandlers(): void {
     }
 
     const insertWord = db.prepare(`
-      INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en, example_fr, notes, created_at, updated_at)
-      VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en, @example_fr, @notes, @created_at, @updated_at)
+      INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en, example_fr, notes, impersonal, created_at, updated_at)
+      VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en, @example_fr, @notes, @impersonal, @created_at, @updated_at)
     `);
     const insertSrs = db.prepare(`
       INSERT INTO srs_state (word_id, due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, state, last_review)
@@ -56,6 +57,7 @@ export function registerWordHandlers(): void {
         translation_en: data.translation_en ?? null,
         example_fr: data.example_fr ?? null,
         notes: data.notes ?? null,
+        impersonal: data.impersonal ? 1 : 0,
         created_at: now,
         updated_at: now
       });
@@ -72,7 +74,7 @@ export function registerWordHandlers(): void {
   /** 用户已存在 → 选择「覆盖」时调用：更新翻译 / 词性等，但保留 SRS 进度 */
   ipcMain.handle('words:update', (_e, id: number, patch: Partial<WordInput>): boolean => {
     const db = getDb();
-    const fields = ['lemma', 'surface', 'pos', 'gender', 'translation_zh', 'translation_en', 'example_fr', 'notes'] as const;
+    const fields = ['lemma', 'surface', 'pos', 'gender', 'translation_zh', 'translation_en', 'example_fr', 'notes', 'impersonal'] as const;
     const sets: string[] = [];
     const params: any = { id, updated_at: Date.now() };
     for (const f of fields) {

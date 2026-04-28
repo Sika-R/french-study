@@ -128,6 +128,11 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
       upd.run(uuid, r.id);
     }
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_uuid ON notes(uuid)`);
+  },
+
+  // ────────── v5 → v6: words 加 impersonal（非人称动词，只考 il） ──────────
+  (db) => {
+    addColumnIfMissing(db, 'words', 'impersonal', 'INTEGER NOT NULL DEFAULT 0');
   }
 
   // 以后加新 schema 在下面 push 新函数即可，不要修改已有的。

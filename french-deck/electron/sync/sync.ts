@@ -11,7 +11,7 @@ import { getDb } from '../../server/db/client.js';
 import { loadConfig, saveConfig } from './config.js';
 import { fetchGist, patchGist, createGist, listMyGists, type GistFiles } from './gist.js';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const GIST_DESCRIPTION = 'french-deck-sync';
 
 interface WordRow {
@@ -23,6 +23,7 @@ interface WordRow {
   translation_en: string | null;
   example_fr: string | null;
   notes: string | null;
+  impersonal: number;
   created_at: number;
   updated_at: number;
 }
@@ -101,7 +102,8 @@ function dumpSnapshot(): Snapshot {
   const db = getDb();
   const words = db.prepare(`
     SELECT lemma, surface, pos, gender, translation_zh, translation_en,
-           example_fr, notes, created_at, COALESCE(updated_at, created_at) AS updated_at
+           example_fr, notes, COALESCE(impersonal, 0) AS impersonal,
+           created_at, COALESCE(updated_at, created_at) AS updated_at
     FROM words
   `).all() as WordRow[];
 
@@ -161,13 +163,14 @@ function mergeIntoLocal(remote: Snapshot): MergeCounts {
     // 1) words：upsert by lemma，仅当 remote.updated_at 更新
     const upsertWord = db.prepare(`
       INSERT INTO words (lemma, surface, pos, gender, translation_zh, translation_en,
-                         example_fr, notes, created_at, updated_at)
+                         example_fr, notes, impersonal, created_at, updated_at)
       VALUES (@lemma, @surface, @pos, @gender, @translation_zh, @translation_en,
-              @example_fr, @notes, @created_at, @updated_at)
+              @example_fr, @notes, @impersonal, @created_at, @updated_at)
       ON CONFLICT(lemma) DO UPDATE SET
         surface=excluded.surface, pos=excluded.pos, gender=excluded.gender,
         translation_zh=excluded.translation_zh, translation_en=excluded.translation_en,
         example_fr=excluded.example_fr, notes=excluded.notes,
+        impersonal=excluded.impersonal,
         updated_at=excluded.updated_at
       WHERE excluded.updated_at > COALESCE(words.updated_at, words.created_at)
     `);
@@ -184,7 +187,8 @@ function mergeIntoLocal(remote: Snapshot): MergeCounts {
         lemma: w.lemma, surface: w.surface, pos: w.pos,
         gender: w.gender, translation_zh: w.translation_zh,
         translation_en: w.translation_en, example_fr: w.example_fr,
-        notes: w.notes, created_at: w.created_at, updated_at: w.updated_at
+        notes: w.notes, impersonal: w.impersonal ?? 0,
+        created_at: w.created_at, updated_at: w.updated_at
       });
       if (result.changes > 0) counts.words++;
       const after = (lookupWordId.get(w.lemma) as { id: number } | undefined)?.id;

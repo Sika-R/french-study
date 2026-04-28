@@ -10,7 +10,8 @@ const api = {
     count: () => ipcRenderer.invoke('words:count'),
     byDate: () => ipcRenderer.invoke('words:byDate'),
     recommended: () => ipcRenderer.invoke('words:recommended'),
-    byIds: (ids: number[]) => ipcRenderer.invoke('words:byIds', ids)
+    byIds: (ids: number[]) => ipcRenderer.invoke('words:byIds', ids),
+    idsByLemmas: (lemmas: string[]) => ipcRenderer.invoke('words:idsByLemmas', lemmas)
   },
   lookup: {
     word: (surface: string) => ipcRenderer.invoke('lookup:word', surface),

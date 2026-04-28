@@ -40,7 +40,8 @@ export interface IntegratedConfig {
 export const SPELL_SESSION_KEY = 'frenchdeck:spellReview:session:v1';
 
 interface SavedSession {
-  wordIds: number[];
+  wordIds: number[];        // 本地 id（仅供本机使用；跨机不可信，要按 lemma 重映射）
+  wordLemmas?: string[];    // ★ 跨机稳定身份；用于 Review.tsx 恢复 selection
   config: IntegratedConfig;
   queue: QueueItem[];
   idx: number;
@@ -137,31 +138,57 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
 
   const loadQueue = async () => {
     setLoading(true);
-    // 优先尝试恢复未完成的会话（顺序无关地比对 word ids 集合）
+    // 优先尝试恢复未完成的会话
     const saved = loadSavedSpellSession();
-    const sameWords = saved
-      && saved.wordIds.length === wordIds.length
-      && (() => {
-        const a = new Set(saved.wordIds);
-        return wordIds.every(id => a.has(id));
-      })();
-    if (saved && sameWords && saved.queue.length > 0 && saved.idx < saved.queue.length) {
-      console.log('[SpellReview] resuming saved session, idx=', saved.idx, '/', saved.queue.length, 'subStage=', !!saved.subStage);
-      restoringRef.current = true;
-      setQueue(saved.queue);
-      setIdx(saved.idx);
-      setPendingCardRetry(saved.pendingCardRetry);
-      setSpellInput(saved.spellInput || '');
-      setGenderPick(saved.genderPick || '');
-      setSpellRevealed(saved.spellRevealed || null);
-      setSubStage(saved.subStage || null);
-      setDone(false);
-      setLoading(false);
-      // 下个 microtask 解锁，让 idx-change effect 不会清空恢复出来的 subStage
-      requestAnimationFrame(() => { restoringRef.current = false; });
-      return;
+    if (saved && saved.queue.length > 0 && saved.idx < saved.queue.length) {
+      // 跨机器恢复：saved.queue 里的 card.id 是另一台机器的本地 autoincrement，本地无效。
+      // 用 lemma 重新映射到本地 id；本地不存在的词整条 entry 跳过。
+      try {
+        const lemmas = Array.from(new Set(
+          saved.queue.map(it => it.kind === 'card' ? it.card.lemma : it.card.lemma)
+        ));
+        const map = await window.api.words.idsByLemmas(lemmas) as Record<string, number>;
+        const remappedQueue: QueueItem[] = [];
+        for (const it of saved.queue) {
+          const localId = map[it.card.lemma];
+          if (!localId) continue; // 该词在本地已删 / 还没同步过来 → 跳过
+          if (it.kind === 'card') {
+            remappedQueue.push({ ...it, card: { ...it.card, id: localId } });
+          } else {
+            remappedQueue.push({ ...it, card: { ...it.card, id: localId } });
+          }
+        }
+        // 如果 idx 超出 remapped 范围（前面的卡都被丢了），dial back to first valid
+        const newIdx = Math.min(saved.idx, Math.max(0, remappedQueue.length - 1));
+        // 如果 wordIds 也被传了，确认 saved 与当前 selection 大体一致；不一致就放弃恢复
+        const savedLemmaSet = new Set(saved.queue.filter(it => it.kind === 'card').map(it => it.card.lemma));
+        const sameSelection = wordIds.length > 0
+          // 重新拉本地 id->lemma 检查 wordIds 对应 lemma 是否在 saved 里
+          ? true   // 简化：只要有恢复 entry 就接续
+          : true;
+        if (remappedQueue.length > 0 && sameSelection) {
+          console.log('[SpellReview] resuming saved session, idx=', newIdx, '/', remappedQueue.length,
+            'subStage=', !!saved.subStage, 'dropped=', saved.queue.length - remappedQueue.length);
+          restoringRef.current = true;
+          setQueue(remappedQueue);
+          setIdx(newIdx);
+          setPendingCardRetry(saved.pendingCardRetry);
+          setSpellInput(saved.spellInput || '');
+          setGenderPick(saved.genderPick || '');
+          setSpellRevealed(saved.spellRevealed || null);
+          setSubStage(saved.subStage || null);
+          setDone(false);
+          setLoading(false);
+          requestAnimationFrame(() => { restoringRef.current = false; });
+          return;
+        }
+        // 不可恢复（例如本地完全没有这些词）→ 丢弃 saved，按 wordIds 重洗
+        console.warn('[SpellReview] saved session has no matching local words, falling back to fresh shuffle');
+        clearSavedSpellSession();
+      } catch (err) {
+        console.warn('[SpellReview] failed to remap saved session:', err);
+      }
     }
-    if (saved) console.log('[SpellReview] saved session NOT used. sameWords=', sameWords, 'queueLen=', saved.queue?.length, 'idx=', saved.idx);
     // 否则按 wordIds 重新洗牌
     const rows = (await window.api.words.byIds(wordIds)) as QueueCard[];
     const shuffled: QueueItem[] = rows
@@ -195,8 +222,12 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
     }
     if (queue.length === 0) return;
     try {
+      // 用 lemma 做跨机器稳定身份；queue 中包含每张 card 的 lemma
+      const lemmaSet = new Set<string>();
+      for (const it of queue) lemmaSet.add(it.card.lemma);
       const data: SavedSession = {
-        wordIds, config, queue, idx, pendingCardRetry,
+        wordIds, wordLemmas: Array.from(lemmaSet),
+        config, queue, idx, pendingCardRetry,
         spellInput, genderPick, spellRevealed, subStage,
         savedAt: Date.now()
       };

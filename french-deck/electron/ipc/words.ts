@@ -158,4 +158,16 @@ export function registerWordHandlers(): void {
     const placeholders = ids.map(() => '?').join(',');
     return db.prepare(`SELECT * FROM words WHERE id IN (${placeholders})`).all(...ids);
   });
+
+  /** 给定一组 lemma，返回 lemma → 本地 id 的映射；用于跨机器恢复 session（id 跨机不稳定） */
+  ipcMain.handle('words:idsByLemmas', (_e, lemmas: string[]) => {
+    if (!lemmas || lemmas.length === 0) return {};
+    const db = getDb();
+    const placeholders = lemmas.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT id, lemma FROM words WHERE lemma IN (${placeholders})`)
+      .all(...lemmas) as { id: number; lemma: string }[];
+    const out: Record<string, number> = {};
+    for (const r of rows) out[r.lemma] = r.id;
+    return out;
+  });
 }

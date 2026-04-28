@@ -85,7 +85,11 @@ export function registerReviewHandlers(): void {
     const rating: SrsRating = args.rating ?? (correct ? 3 : 1);
 
     const row = db.prepare('SELECT * FROM srs_state WHERE word_id = ?').get(args.word_id) as SrsRow | undefined;
-    if (!row) throw new Error('SRS state missing for word ' + args.word_id);
+    if (!row) {
+      // word_id 不存在（同步后队列残留旧 id）→ 不写日志，返回但标记 skipped
+      console.warn(`[review:submit] skip log for missing word_id=${args.word_id}`);
+      return { correct, due: 0, rating, skipped: true };
+    }
 
     const updated = applyReview(row, rating);
     db.prepare(`

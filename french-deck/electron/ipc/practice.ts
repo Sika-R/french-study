@@ -62,6 +62,12 @@ export function registerPracticeHandlers(): void {
     const t = tenseById(args.tense_id);
     if (!t) throw new Error('Unknown tense ' + args.tense_id);
     const db = getDb();
+    // 防御：word_id 不存在 → 直接返回，不写日志（同步后队列残留旧 id 可能触发）
+    const exists = db.prepare('SELECT 1 FROM words WHERE id = ?').get(args.word_id);
+    if (!exists) {
+      console.warn(`[practice:submitTable] skip log for missing word_id=${args.word_id}`);
+      return [];
+    }
     const persons = t.persons.length > 0 ? t.persons : [0];
 
     const insertLog = db.prepare(`
@@ -107,6 +113,12 @@ export function registerPracticeHandlers(): void {
     correct: boolean;     // 由前端比对（reverse 模式涉及多字段，前端处理）
   }) => {
     const db = getDb();
+    // 防御：word_id 不存在时直接跳过日志写入（常见于云同步后队列里残留旧机器的 id）
+    const exists = db.prepare('SELECT 1 FROM words WHERE id = ?').get(args.word_id);
+    if (!exists) {
+      console.warn(`[practice:submitOne] skip log for missing word_id=${args.word_id} (possibly stale after sync)`);
+      return { correct: args.correct, skipped: true };
+    }
     const modeName =
       args.mode === 'drill' ? 'drill-single'
       : args.mode === 'reverse' ? 'drill-reverse'

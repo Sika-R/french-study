@@ -66,7 +66,25 @@ export default function Review() {
       const saved = loadSavedSpellSession();
       if (saved) {
         setSpellConfig(saved.config);
-        setSpellWordIds(saved.wordIds);
+        // wordIds 是另一台机器的本地 autoincrement，跨机不稳定。
+        // 优先用 wordLemmas 重新映射到本地 id；若旧版本没有 wordLemmas，回退用 wordIds
+        if (saved.wordLemmas && saved.wordLemmas.length > 0) {
+          try {
+            const map = await (window as any).api.words.idsByLemmas(saved.wordLemmas) as Record<string, number>;
+            const localIds = saved.wordLemmas.map(l => map[l]).filter((x): x is number => typeof x === 'number');
+            if (localIds.length > 0) {
+              setSpellWordIds(localIds);
+            } else {
+              // 一个本地都不剩 → 干脆放弃这个 saved session
+              clearSavedSpellSession();
+            }
+          } catch (err) {
+            console.warn('[Review] remap saved wordLemmas failed:', err);
+            setSpellWordIds(saved.wordIds);
+          }
+        } else {
+          setSpellWordIds(saved.wordIds);
+        }
       }
     })();
     return () => { cancelled = true; };

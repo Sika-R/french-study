@@ -219,7 +219,11 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
         retryTenseId: item.tenseId
       });
     }
-  }, [idx, queue]);
+    // 注意：deps 故意不包含 queue。queue 是 append-only，当前位置 queue[idx] 不会被改写；
+    // 把 queue 作为 dep 会导致每次往队尾 push（完成子练习 / 错题压回）都把当前 subStage 清掉，
+    // 表现为「做变位时突然跳回原型阶段」。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx]);
 
   // 每张新卡：根据词性把焦点放在 le radio (noun) 或拼写 input (其它)
   useEffect(() => {

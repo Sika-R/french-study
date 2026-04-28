@@ -30,9 +30,12 @@ const POS_LABEL: Record<string, string> = {
 
 export default function SelectWordsDialog({ posOnly, onConfirm, onCancel }: Props) {
   const [mode, setMode] = useState<Mode>('recommended');
-  const [allWords, setAllWords] = useState<WordRow[]>([]);
-  const [dateGroups, setDateGroups] = useState<DateGroup[]>([]);
-  const [recommendedIds, setRecommendedIds] = useState<number[]>([]);
+  // 当 posOnly 已经被外层锁死（动词/形容词/名词 tab）时，内部不再展示词性筛选；
+  // 否则（拼写 tab）允许在弹窗里临时挑词性。'' 表示不筛。
+  const [posFilter, setPosFilter] = useState<string>('');
+  const [rawWords, setRawWords] = useState<WordRow[]>([]);
+  const [rawDateGroups, setRawDateGroups] = useState<DateGroup[]>([]);
+  const [rawRecommendedIds, setRawRecommendedIds] = useState<number[]>([]);
   const [pickedIds, setPickedIds] = useState<Set<number>>(new Set());
   const [pickedDates, setPickedDates] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
@@ -42,21 +45,52 @@ export default function SelectWordsDialog({ posOnly, onConfirm, onCancel }: Prop
     (async () => {
       const all = (await window.api.words.list({ limit: 500 })) as WordRow[];
       const filtered = posOnly ? all.filter(w => w.pos === posOnly) : all;
-      setAllWords(filtered);
+      setRawWords(filtered);
 
       const ds = (await window.api.words.byDate()) as DateGroup[];
-      setDateGroups(posOnly
+      setRawDateGroups(posOnly
         ? ds.map(d => ({ ...d, ids: d.ids.filter(id => filtered.some(w => w.id === id)) }))
             .filter(d => d.ids.length > 0)
         : ds
       );
 
       const rec = (await window.api.words.recommended()) as number[];
-      setRecommendedIds(posOnly ? rec.filter(id => filtered.some(w => w.id === id)) : rec);
+      setRawRecommendedIds(posOnly ? rec.filter(id => filtered.some(w => w.id === id)) : rec);
 
       setLoading(false);
     })();
   }, [posOnly]);
+
+  // 词性下拉的可选项：根据当前所有单词聚合
+  const posOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const w of rawWords) counts.set(w.pos, (counts.get(w.pos) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [rawWords]);
+
+  // 应用 posFilter（弹窗内的临时筛选）
+  const allWords = useMemo(
+    () => posFilter ? rawWords.filter(w => w.pos === posFilter) : rawWords,
+    [rawWords, posFilter]
+  );
+  const dateGroups = useMemo(() => {
+    if (!posFilter) return rawDateGroups;
+    const allowed = new Set(allWords.map(w => w.id));
+    return rawDateGroups
+      .map(d => ({ ...d, ids: d.ids.filter(id => allowed.has(id)) }))
+      .filter(d => d.ids.length > 0);
+  }, [rawDateGroups, posFilter, allWords]);
+  const recommendedIds = useMemo(() => {
+    if (!posFilter) return rawRecommendedIds;
+    const allowed = new Set(allWords.map(w => w.id));
+    return rawRecommendedIds.filter(id => allowed.has(id));
+  }, [rawRecommendedIds, posFilter, allWords]);
+
+  // 切换 posFilter 时清空已选（避免里面残留不在新候选池里的 id）
+  useEffect(() => {
+    setPickedIds(new Set());
+    setPickedDates(new Set());
+  }, [posFilter]);
 
   // 根据当前模式计算最终选定的 word ids
   const finalIds = useMemo<number[]>(() => {
@@ -105,11 +139,25 @@ export default function SelectWordsDialog({ posOnly, onConfirm, onCancel }: Prop
       }}>
         <h2 style={{ marginTop: 0 }}>选择今日要复习的单词{posOnly && ` (仅${POS_LABEL[posOnly] ?? posOnly})`}</h2>
 
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <button className={mode === 'recommended' ? '' : 'ghost'} onClick={() => setMode('recommended')}>推荐 (按记忆曲线)</button>
           <button className={mode === 'byDate' ? '' : 'ghost'} onClick={() => setMode('byDate')}>按日期</button>
           <button className={mode === 'multiSelect' ? '' : 'ghost'} onClick={() => setMode('multiSelect')}>从列表多选</button>
           <button className={mode === 'random' ? '' : 'ghost'} onClick={() => setMode('random')}>全选 / 纯随机</button>
+          {!posOnly && (
+            <>
+              <span style={{ flex: 1 }} />
+              <label className="muted" style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                词性：
+                <select value={posFilter} onChange={e => setPosFilter(e.target.value)} style={{ padding: '4px 8px' }}>
+                  <option value="">全部</option>
+                  {posOptions.map(([p, n]) => (
+                    <option key={p} value={p}>{(POS_LABEL[p] ?? p)} ({n})</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 200 }}>
@@ -188,7 +236,7 @@ export default function SelectWordsDialog({ posOnly, onConfirm, onCancel }: Prop
 
           {!loading && mode === 'random' && (
             <div>
-              <p className="muted">把所有 {allWords.length} 个{posOnly ? POS_LABEL[posOnly] : '单词'}都纳入，开始练习时再随机洗牌。</p>
+              <p className="muted">把所有 {allWords.length} 个{posOnly ? (POS_LABEL[posOnly] ?? posOnly) : (posFilter ? (POS_LABEL[posFilter] ?? posFilter) : '单词')}都纳入，开始练习时再随机洗牌。</p>
             </div>
           )}
         </div>

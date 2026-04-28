@@ -305,9 +305,10 @@ export default function IntegratedSpellReview({ wordIds, config, onExit }: Props
   };
 
   const advanceWord = (spellCorrect: boolean) => {
-    // 拼写错的整张卡压回末尾（重新走拼写）
+    // 拼写错的整张卡压回末尾（重新走拼写）；保留 spellOnly 标记，避免再次跑已经做过的子练习
     if (!spellCorrect && card) {
-      setQueue(q => [...q, { kind: 'card', card }]);
+      const wasSpellOnly = currentItem?.kind === 'card' && currentItem.spellOnly;
+      setQueue(q => [...q, { kind: 'card', card, spellOnly: wasSpellOnly || undefined }]);
     }
     const newQueueLen = queue.length + (spellCorrect ? 0 : 1);
     if (idx + 1 >= newQueueLen) setDone(true);
